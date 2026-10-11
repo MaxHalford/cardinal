@@ -12,6 +12,7 @@ A line may be "<true count>||<sql>" (STATS-CEB): check compares against it.
 import json
 import os
 import pathlib
+import re
 import subprocess
 import sys
 import threading
@@ -28,6 +29,9 @@ TIMEOUT = 600  # seconds per true count
 
 # Table filters that never change a result: hints, or runtime-only.
 SKIP_FILTERS = {"OPTIONAL_FILTER", "DYNAMIC_FILTER", "BLOOM_FILTER"}
+
+# A column in trace SQL: r<relation>.<column>, the column optionally quoted.
+COLUMN = re.compile(r'\br(\d+)\.("(?:[^"]|"")+"|\w+)')
 
 
 def read_workload(path):
@@ -77,22 +81,22 @@ def trace(workload, db, out):
     write_jsonl(out / "queries.jsonl", queries)
 
 
-def count_sql(inv, rels, qset):
-    """COUNT(*) SQL for relation set qset, or (None, status)."""
+def question_parts(inv, rels, qset):
+    """({relation: local predicates}, join predicates), or (None, status)."""
     for r in qset:
         if rels[r]["kind"] != "table":
             return None, "derived_relation"
 
-    preds = []
+    local = {r: list(rels[r]["filters"]) for r in qset}
     for r in qset:
         for f in rels[r]["table_filters"]:
             if f["type"] in SKIP_FILTERS:
                 continue
             if f["sql"] is None:
                 return None, "unrenderable_filter"
-            preds.append(f["sql"])
-        preds += rels[r]["filters"]
+            local[r].append(f["sql"])
 
+    joins = []
     for f in inv["filters"]:
         if not set(f["set"]) <= set(qset):
             continue
@@ -100,11 +104,51 @@ def count_sql(inv, rels, qset):
             return None, "join_type_" + f["join_type"].lower()
         if f["sql"] is None:
             return None, "unrenderable_filter"
-        preds.append(f["sql"])
+        if len(f["set"]) == 1:
+            local[f["set"][0]].append(f["sql"])
+        else:
+            joins.append(f["sql"])
+    return (local, joins), "ok"
 
-    tables = ", ".join(f'"{rels[r]["schema"]}"."{rels[r]["table"]}" AS r{r}' for r in qset)
-    where = " WHERE " + " AND ".join(preds) if preds else ""
-    return f"SELECT count(*) FROM {tables}{where}", "ok"
+
+def table(rel):
+    return f'"{rel["schema"]}"."{rel["table"]}" AS r{rel["id"]}'
+
+
+def where(preds):
+    return " WHERE " + " AND ".join(preds) if preds else ""
+
+
+def plain_sql(rels, local, joins):
+    """SELECT count(*) over the join: the readable, published form."""
+    preds = [p for r in local for p in local[r]] + joins
+    return f"SELECT count(*) FROM {', '.join(table(rels[r]) for r in local)}{where(preds)}"
+
+
+def fast_sql(rels, local, joins):
+    """Same count, without materializing the join.
+
+    Each relation is grouped by the columns its join predicates use, then
+    count(*) = sum of the product of group counts over the joined groups.
+    Exact for any predicate over those columns.
+    """
+    if len(local) == 1:
+        return plain_sql(rels, local, joins)
+
+    cols = {r: set() for r in local}
+    for j in joins:
+        for r, col in COLUMN.findall(j):
+            cols[int(r)].add(col)
+
+    subs = []
+    for r in local:
+        keys = ", ".join(sorted(cols[r]))
+        select = f"{keys}, count(*) AS c" if keys else "count(*) AS c"
+        group = f" GROUP BY {keys}" if keys else ""
+        subs.append(f"(SELECT {select} FROM {table(rels[r])}{where(local[r])}{group}) AS r{r}")
+
+    product = " * ".join(f"r{r}.c" for r in local).replace(".c", ".c::HUGEINT", 1)
+    return f"SELECT coalesce(sum({product}), 0) FROM {', '.join(subs)}{where(joins)}"
 
 
 def build(out):
@@ -140,9 +184,11 @@ def build(out):
                 seen[k]["calls"] += 1
                 continue
             inv = by_inv[e["inv"]]
-            sql, status = count_sql(inv, inv["relations"], e["set"])
+            parts, status = question_parts(inv, inv["relations"], e["set"])
+            sql = plain_sql(inv["relations"], *parts) if parts else None
+            fast = fast_sql(inv["relations"], *parts) if parts else None
             seen[k] = {"query": qid, "inv": e["inv"], "set": e["set"], "est": e["est"], "calls": 1,
-                       "first_seq": e["seq"], "sql": sql, "status": status}
+                       "first_seq": e["seq"], "sql": sql, "fast_sql": fast, "status": status}
         questions += seen.values()
 
     write_jsonl(out / "invocations.jsonl", invs)
@@ -170,12 +216,13 @@ def truth(db, out):
     cache_path = out / "truth_cache.jsonl"
     cache = {r["sql"]: r for r in read_jsonl(cache_path)} if cache_path.exists() else {}
     questions = read_jsonl(out / "questions.jsonl")
-    todo = sorted({q["sql"] for q in questions if q["status"] == "ok"} - cache.keys())
+    fast = {q["sql"]: q["fast_sql"] for q in questions if q["status"] == "ok"}
+    todo = sorted(fast.keys() - cache.keys())
     con = duckdb.connect(str(db), read_only=True)
 
     with open(cache_path, "a") as f:
         for i, sql in enumerate(todo, 1):
-            n, secs = run_count(con, sql)
+            n, secs = run_count(con, fast[sql])
             cache[sql] = {"sql": sql, "true": n, "seconds": round(secs, 3)}
             f.write(json.dumps(cache[sql]) + "\n")
             f.flush()
