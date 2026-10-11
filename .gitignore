@@ -1,0 +1,5 @@
+vendor/bin/
+data/
+.venv/
+__pycache__/
+.DS_Store

@@ -1,0 +1,6 @@
+[submodule "vendor/duckdb"]
+	path = vendor/duckdb
+	url = https://github.com/duckdb/duckdb.git
+[submodule "vendor/learnedcardinalities"]
+	path = vendor/learnedcardinalities
+	url = https://github.com/andreaskipf/learnedcardinalities.git

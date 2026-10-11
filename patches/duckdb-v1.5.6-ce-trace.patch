@@ -1,0 +1,654 @@
+diff --git a/src/include/duckdb/optimizer/join_order/cardinality_estimator.hpp b/src/include/duckdb/optimizer/join_order/cardinality_estimator.hpp
+index 0217b73..63c276d 100644
+--- a/src/include/duckdb/optimizer/join_order/cardinality_estimator.hpp
++++ b/src/include/duckdb/optimizer/join_order/cardinality_estimator.hpp
+@@ -113,6 +113,8 @@ public:
+ 	//! used for debugging.
+ 	void AddRelationNamesToRelationStats(vector<RelationStats> &stats);
+ 	void PrintRelationStats();
++	//! Write the total domains to the CE trace (cardinal-duck research patch)
++	void TraceTotalDomains();
+ 
+ private:
+ 	double GetNumerator(JoinRelationSet &set);
+diff --git a/src/include/duckdb/optimizer/join_order/ce_trace.hpp b/src/include/duckdb/optimizer/join_order/ce_trace.hpp
+new file mode 100644
+index 0000000..0b8aa0d
+--- /dev/null
++++ b/src/include/duckdb/optimizer/join_order/ce_trace.hpp
+@@ -0,0 +1,61 @@
++//===----------------------------------------------------------------------===//
++//                         DuckDB
++//
++// duckdb/optimizer/join_order/ce_trace.hpp
++//
++// Research patch (cardinal-duck): logs every cardinality question asked by the
++// join order optimizer as JSON lines to the file named by $DUCKDB_CE_TRACE.
++// Logging only, it does not change any optimizer decision.
++//===----------------------------------------------------------------------===//
++
++#pragma once
++
++#include "duckdb/common/common.hpp"
++#include "duckdb/common/reference_map.hpp"
++
++namespace duckdb {
++
++class QueryGraphManager;
++class DPJoinNode;
++struct JoinRelationSet;
++
++class CETrace {
++public:
++	static bool Enabled();
++	static void WriteLine(const string &line);
++	static string Quote(const string &text);
++	static string Number(double value);
++	static string RelationList(const JoinRelationSet &set);
++	//! Id of the innermost active optimizer invocation (0 if none)
++	static idx_t CurrentInvocation();
++	//! Next sequence number of an event within the current invocation
++	static idx_t NextSequence();
++	//! Who asked the current question: "leaf", "cost_model" or "join_node"
++	static const char *&Caller();
++
++	static void Question(const JoinRelationSet &set, double estimate, bool cache_hit, double numerator,
++	                     double denominator);
++	static void Phase(const string &name);
++	static void Graph(QueryGraphManager &query_graph_manager, bool reorderable, idx_t depth);
++	static void Plan(QueryGraphManager &query_graph_manager,
++	                 const reference_map_t<JoinRelationSet, unique_ptr<DPJoinNode>> &plans);
++};
++
++//! RAII scope for one JoinOrderOptimizer::Optimize call
++class CETraceInvocation {
++public:
++	CETraceInvocation();
++	~CETraceInvocation();
++};
++
++//! RAII scope that sets the caller tag of question events
++class CETraceCaller {
++public:
++	explicit CETraceCaller(const char *caller);
++	~CETraceCaller();
++
++private:
++	const char *previous;
++};
++
++} // namespace duckdb
+diff --git a/src/include/duckdb/optimizer/join_order/relation_manager.hpp b/src/include/duckdb/optimizer/join_order/relation_manager.hpp
+index 13f037a..6b6382b 100644
+--- a/src/include/duckdb/optimizer/join_order/relation_manager.hpp
++++ b/src/include/duckdb/optimizer/join_order/relation_manager.hpp
+@@ -66,6 +66,10 @@ public:
+ 	vector<unique_ptr<SingleJoinRelation>> GetRelations();
+ 
+ 	const vector<RelationStats> GetRelationStats();
++	//! Read-only access for the CE trace (cardinal-duck research patch)
++	const vector<unique_ptr<SingleJoinRelation>> &PeekRelations() const {
++		return relations;
++	}
+ 	//! A mapping of base table index -> index into relations array (relation number)
+ 	unordered_map<idx_t, idx_t> relation_mapping;
+ 
+diff --git a/src/optimizer/join_order/CMakeLists.txt b/src/optimizer/join_order/CMakeLists.txt
+index 8b6469c..15aa777 100644
+--- a/src/optimizer/join_order/CMakeLists.txt
++++ b/src/optimizer/join_order/CMakeLists.txt
+@@ -10,7 +10,8 @@ add_library_unity(
+   plan_enumerator.cpp
+   relation_manager.cpp
+   query_graph_manager.cpp
+-  relation_statistics_helper.cpp)
++  relation_statistics_helper.cpp
++  ce_trace.cpp)
+ set(ALL_OBJECT_FILES
+     ${ALL_OBJECT_FILES} $<TARGET_OBJECTS:duckdb_optimizer_join_order>
+     PARENT_SCOPE)
+diff --git a/src/optimizer/join_order/cardinality_estimator.cpp b/src/optimizer/join_order/cardinality_estimator.cpp
+index f09070c..17ec1d5 100644
+--- a/src/optimizer/join_order/cardinality_estimator.cpp
++++ b/src/optimizer/join_order/cardinality_estimator.cpp
+@@ -3,6 +3,7 @@
+ #include "duckdb/common/limits.hpp"
+ #include "duckdb/common/printer.hpp"
+ #include "duckdb/function/table/table_scan.hpp"
++#include "duckdb/optimizer/join_order/ce_trace.hpp"
+ #include "duckdb/optimizer/join_order/join_node.hpp"
+ #include "duckdb/optimizer/join_order/query_graph_manager.hpp"
+ #include "duckdb/planner/expression_iterator.hpp"
+@@ -410,7 +411,11 @@ DenomInfo CardinalityEstimator::GetDenominator(JoinRelationSet &set) {
+ template <>
+ double CardinalityEstimator::EstimateCardinalityWithSet(JoinRelationSet &new_set) {
+ 	if (relation_set_2_cardinality.find(new_set.ToString()) != relation_set_2_cardinality.end()) {
+-		return relation_set_2_cardinality[new_set.ToString()].cardinality_before_filters;
++		auto cached = relation_set_2_cardinality[new_set.ToString()].cardinality_before_filters;
++		if (CETrace::Enabled()) {
++			CETrace::Question(new_set, cached, true, 0, 0);
++		}
++		return cached;
+ 	}
+ 
+ 	// can happen if a table has cardinality 0, or a tdom is set to 0
+@@ -422,11 +427,15 @@ double CardinalityEstimator::EstimateCardinalityWithSet(JoinRelationSet &new_set
+ 	double result = numerator / denom.denominator;
+ 	auto new_entry = CardinalityHelper(result);
+ 	relation_set_2_cardinality[new_set.ToString()] = new_entry;
++	if (CETrace::Enabled()) {
++		CETrace::Question(new_set, result, false, numerator, denom.denominator);
++	}
+ 	return result;
+ }
+ 
+ template <>
+ idx_t CardinalityEstimator::EstimateCardinalityWithSet(JoinRelationSet &new_set) {
++	CETraceCaller ce_trace_caller("join_node");
+ 	auto cardinality_as_double = EstimateCardinalityWithSet<double>(new_set);
+ 	auto max = NumericLimits<idx_t>::Maximum();
+ 	if (cardinality_as_double >= (double)max) {
+@@ -455,6 +464,10 @@ void CardinalityEstimator::InitCardinalityEstimatorProps(optional_ptr<JoinRelati
+ 
+ 	auto card_helper = CardinalityHelper((double)relation_cardinality);
+ 	relation_set_2_cardinality[set->ToString()] = card_helper;
++	if (CETrace::Enabled()) {
++		CETraceCaller ce_trace_caller("leaf");
++		CETrace::Question(*set, card_helper.cardinality_before_filters, false, 0, 0);
++	}
+ 
+ 	UpdateTotalDomains(set, stats);
+ 
+@@ -494,6 +507,32 @@ void CardinalityEstimator::UpdateTotalDomains(optional_ptr<JoinRelationSet> set,
+ 	}
+ }
+ 
++void CardinalityEstimator::TraceTotalDomains() {
++	if (!CETrace::Enabled()) {
++		return;
++	}
++	for (auto &total_domain : relation_set_stats) {
++		string columns = "[";
++		bool first = true;
++		for (auto &binding : total_domain.equivalent_relations) {
++			columns += string(first ? "" : ",") + "[" + to_string(binding.table_index) + "," +
++			           to_string(binding.column_index) + "]";
++			first = false;
++		}
++		string filters = "[";
++		for (idx_t i = 0; i < total_domain.filters.size(); i++) {
++			filters += string(i ? "," : "") + to_string(total_domain.filters[i]->filter_index);
++		}
++		auto no_hll = total_domain.distinct_count_no_hll == NumericLimits<idx_t>::Maximum()
++		                  ? string("null")
++		                  : to_string(total_domain.distinct_count_no_hll);
++		CETrace::WriteLine("{\"ev\":\"tdom\",\"inv\":" + to_string(CETrace::CurrentInvocation()) +
++		                   ",\"columns\":" + columns + "],\"filters\":" + filters +
++		                   "],\"has_hll\":" + (total_domain.has_distinct_count_hll ? "true" : "false") +
++		                   ",\"hll\":" + to_string(total_domain.distinct_count_hll) + ",\"no_hll\":" + no_hll + "}");
++	}
++}
++
+ // LCOV_EXCL_START
+ 
+ void CardinalityEstimator::AddRelationNamesToRelationStats(vector<RelationStats> &stats) {
+diff --git a/src/optimizer/join_order/ce_trace.cpp b/src/optimizer/join_order/ce_trace.cpp
+new file mode 100644
+index 0000000..9316513
+--- /dev/null
++++ b/src/optimizer/join_order/ce_trace.cpp
+@@ -0,0 +1,373 @@
++#include "duckdb/optimizer/join_order/ce_trace.hpp"
++
++#include "duckdb/catalog/catalog_entry/table_catalog_entry.hpp"
++#include "duckdb/common/enum_util.hpp"
++#include "duckdb/common/enums/join_type.hpp"
++#include "duckdb/common/enums/logical_operator_type.hpp"
++#include "duckdb/optimizer/join_order/join_node.hpp"
++#include "duckdb/optimizer/join_order/query_graph_manager.hpp"
++#include "duckdb/parser/keyword_helper.hpp"
++#include "duckdb/planner/expression/bound_columnref_expression.hpp"
++#include "duckdb/planner/expression_iterator.hpp"
++#include "duckdb/planner/operator/logical_get.hpp"
++#include "duckdb/planner/table_filter.hpp"
++
++#include <atomic>
++#include <cmath>
++#include <cstdio>
++#include <cstdlib>
++#include <fstream>
++#include <mutex>
++
++namespace duckdb {
++
++namespace {
++
++struct TraceState {
++	std::mutex lock;
++	std::ofstream out;
++	bool enabled = false;
++	std::atomic<idx_t> next_invocation {1};
++};
++
++TraceState &GetState() {
++	static TraceState *state = []() {
++		auto result = new TraceState();
++		auto path = std::getenv("DUCKDB_CE_TRACE");
++		if (path && *path) {
++			result->out.open(path, std::ios::out | std::ios::app);
++			result->enabled = result->out.is_open();
++		}
++		return result;
++	}();
++	return *state;
++}
++
++struct InvocationFrame {
++	idx_t id;
++	idx_t sequence;
++};
++
++vector<InvocationFrame> &Frames() {
++	static thread_local vector<InvocationFrame> frames;
++	return frames;
++}
++
++//! Walk down the FILTER/LIMIT chain that the relation manager passes through
++LogicalOperator &BaseOperator(LogicalOperator &op, vector<LogicalOperatorType> &chain) {
++	reference<LogicalOperator> current = op;
++	while (current.get().children.size() == 1 && (current.get().type == LogicalOperatorType::LOGICAL_FILTER ||
++	                                               current.get().type == LogicalOperatorType::LOGICAL_LIMIT)) {
++		chain.push_back(current.get().type);
++		current = *current.get().children[0];
++	}
++	return current.get();
++}
++
++optional_ptr<LogicalGet> TableGet(LogicalOperator &base, const vector<LogicalOperatorType> &chain) {
++	if (base.type != LogicalOperatorType::LOGICAL_GET || !base.children.empty()) {
++		return nullptr;
++	}
++	for (auto type : chain) {
++		if (type != LogicalOperatorType::LOGICAL_FILTER) {
++			return nullptr;
++		}
++	}
++	auto &get = base.Cast<LogicalGet>();
++	if (!get.GetTable()) {
++		return nullptr;
++	}
++	return &get;
++}
++
++string Alias(idx_t relation_id, const string &column) {
++	return "r" + to_string(relation_id) + "." + KeywordHelper::WriteOptionallyQuoted(column);
++}
++
++//! Name of an original column binding, as r<relation>.<column>
++string BindingName(QueryGraphManager &qgm, const vector<unique_ptr<SingleJoinRelation>> &relations,
++                   const ColumnBinding &binding) {
++	auto entry = qgm.relation_manager.relation_mapping.find(binding.table_index);
++	if (entry == qgm.relation_manager.relation_mapping.end()) {
++		return "unmapped_" + to_string(binding.table_index) + "_" + to_string(binding.column_index);
++	}
++	auto relation_id = entry->second;
++	vector<LogicalOperatorType> chain;
++	auto &base = BaseOperator(relations[relation_id]->op, chain);
++	if (base.type == LogicalOperatorType::LOGICAL_GET) {
++		auto &get = base.Cast<LogicalGet>();
++		auto &column_ids = get.GetColumnIds();
++		if (get.table_index == binding.table_index && binding.column_index < column_ids.size()) {
++			return Alias(relation_id, get.GetColumnName(column_ids[binding.column_index]));
++		}
++	}
++	return Alias(relation_id, "col_" + to_string(binding.table_index) + "_" + to_string(binding.column_index));
++}
++
++void RewriteColumnRefs(Expression &expr, const std::function<string(const ColumnBinding &)> &namer) {
++	if (expr.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
++		auto &colref = expr.Cast<BoundColumnRefExpression>();
++		colref.SetAlias(namer(colref.binding));
++	}
++	ExpressionIterator::EnumerateChildren(expr, [&](Expression &child) { RewriteColumnRefs(child, namer); });
++}
++
++string BindingJson(const ColumnBinding &binding) {
++	if (binding.table_index == DConstants::INVALID_INDEX) {
++		return "null";
++	}
++	return "[" + to_string(binding.table_index) + "," + to_string(binding.column_index) + "]";
++}
++
++string OptionalSet(optional_ptr<JoinRelationSet> set) {
++	return set ? CETrace::RelationList(*set) : "null";
++}
++
++} // namespace
++
++bool CETrace::Enabled() {
++	return GetState().enabled;
++}
++
++void CETrace::WriteLine(const string &line) {
++	auto &state = GetState();
++	std::lock_guard<std::mutex> guard(state.lock);
++	state.out << line << '\n';
++	state.out.flush();
++}
++
++string CETrace::Quote(const string &text) {
++	string result = "\"";
++	for (unsigned char c : text) {
++		switch (c) {
++		case '"':
++			result += "\\\"";
++			break;
++		case '\\':
++			result += "\\\\";
++			break;
++		case '\n':
++			result += "\\n";
++			break;
++		case '\r':
++			result += "\\r";
++			break;
++		case '\t':
++			result += "\\t";
++			break;
++		default:
++			if (c < 0x20) {
++				char buffer[8];
++				snprintf(buffer, sizeof(buffer), "\\u%04x", c);
++				result += buffer;
++			} else {
++				result += static_cast<char>(c);
++			}
++		}
++	}
++	return result + "\"";
++}
++
++string CETrace::Number(double value) {
++	if (!std::isfinite(value)) {
++		// JSON has no inf/nan: the generator treats a string here as an error
++		return Quote(std::to_string(value));
++	}
++	char buffer[32];
++	snprintf(buffer, sizeof(buffer), "%.17g", value);
++	return buffer;
++}
++
++string CETrace::RelationList(const JoinRelationSet &set) {
++	string result = "[";
++	for (idx_t i = 0; i < set.count; i++) {
++		result += (i ? "," : "") + to_string(set.relations[i]);
++	}
++	return result + "]";
++}
++
++idx_t CETrace::CurrentInvocation() {
++	auto &frames = Frames();
++	return frames.empty() ? 0 : frames.back().id;
++}
++
++idx_t CETrace::NextSequence() {
++	auto &frames = Frames();
++	return frames.empty() ? 0 : frames.back().sequence++;
++}
++
++const char *&CETrace::Caller() {
++	static thread_local const char *caller = "cost_model";
++	return caller;
++}
++
++void CETrace::Question(const JoinRelationSet &set, double estimate, bool cache_hit, double numerator,
++                       double denominator) {
++	string line = "{\"ev\":\"question\",\"inv\":" + to_string(CurrentInvocation()) +
++	              ",\"seq\":" + to_string(NextSequence()) + ",\"set\":" + RelationList(set) +
++	              ",\"est\":" + Number(estimate) + ",\"cache_hit\":" + (cache_hit ? "true" : "false") +
++	              ",\"caller\":" + Quote(Caller());
++	if (!cache_hit && denominator > 0) {
++		line += ",\"numerator\":" + Number(numerator) + ",\"denominator\":" + Number(denominator);
++	}
++	WriteLine(line + "}");
++}
++
++void CETrace::Phase(const string &name) {
++	if (!Enabled()) {
++		return;
++	}
++	WriteLine("{\"ev\":\"phase\",\"inv\":" + to_string(CurrentInvocation()) + ",\"seq\":" + to_string(NextSequence()) +
++	          ",\"name\":" + Quote(name) + "}");
++}
++
++void CETrace::Graph(QueryGraphManager &qgm, bool reorderable, idx_t depth) {
++	if (!Enabled()) {
++		return;
++	}
++	auto &frames = Frames();
++	idx_t parent = frames.size() >= 2 ? frames[frames.size() - 2].id : 0;
++	auto &relations = qgm.relation_manager.PeekRelations();
++	auto namer = [&](const ColumnBinding &binding) {
++		return BindingName(qgm, relations, binding);
++	};
++
++	string rels = "[";
++	for (idx_t rel_id = 0; rel_id < relations.size(); rel_id++) {
++		auto &relation = *relations[rel_id];
++		vector<LogicalOperatorType> chain;
++		auto &base = BaseOperator(relation.op, chain);
++		auto get = TableGet(base, chain);
++
++		string rel = "{\"id\":" + to_string(rel_id) + ",\"kind\":" + Quote(get ? "table" : "derived") +
++		             ",\"op\":" + Quote(LogicalOperatorToString(base.type));
++		string chain_json = "[";
++		for (idx_t i = 0; i < chain.size(); i++) {
++			chain_json += (i ? "," : "") + Quote(LogicalOperatorToString(chain[i]));
++		}
++		rel += ",\"chain\":" + chain_json + "]";
++
++		if (get) {
++			auto &table = *get->GetTable();
++			rel += ",\"catalog\":" + Quote(table.ParentCatalog().GetName()) +
++			       ",\"schema\":" + Quote(table.ParentSchema().name) + ",\"table\":" + Quote(table.name);
++			if (get->function.cardinality) {
++				auto node_stats = get->function.cardinality(qgm.context, get->bind_data.get());
++				if (node_stats && node_stats->has_estimated_cardinality) {
++					rel += ",\"base_rows\":" + to_string(node_stats->estimated_cardinality);
++				}
++			}
++			string filters = "[";
++			bool first = true;
++			for (auto &entry : get->table_filters.filters) {
++				ColumnIndex column_index(entry.first);
++				auto &column_name = get->GetColumnName(column_index);
++				string sql = "null";
++				try {
++					BoundColumnRefExpression colref(Alias(rel_id, column_name), get->GetColumnType(column_index),
++					                                ColumnBinding(get->table_index, 0));
++					sql = Quote(entry.second->ToExpression(colref)->ToString());
++				} catch (std::exception &) {
++				}
++				filters += string(first ? "" : ",") + "{\"column\":" + Quote(column_name) +
++				           ",\"type\":" + Quote(EnumUtil::ToString(entry.second->filter_type)) + ",\"sql\":" + sql +
++				           "}";
++				first = false;
++			}
++			rel += ",\"table_filters\":" + filters + "]";
++		}
++
++		auto &stats = relation.stats;
++		rel += ",\"est\":" + to_string(stats.cardinality) + ",\"filter_strength\":" + Number(stats.filter_strength);
++		string columns = "[";
++		for (idx_t i = 0; i < stats.column_distinct_count.size(); i++) {
++			auto name = i < stats.column_names.size() ? stats.column_names[i] : string();
++			columns += string(i ? "," : "") + "{\"name\":" + Quote(name) +
++			           ",\"ndv\":" + to_string(stats.column_distinct_count[i].distinct_count) +
++			           ",\"from_hll\":" + (stats.column_distinct_count[i].from_hll ? "true" : "false") + "}";
++		}
++		rel += ",\"columns\":" + columns + "]}";
++		rels += string(rel_id ? "," : "") + rel;
++	}
++	rels += "]";
++
++	string filters = "[";
++	if (reorderable) {
++		auto &filter_infos = qgm.GetFilterBindings();
++		for (idx_t i = 0; i < filter_infos.size(); i++) {
++			auto &info = *filter_infos[i];
++			string sql = "null";
++			if (info.filter) {
++				auto copy = info.filter->Copy();
++				RewriteColumnRefs(*copy, namer);
++				sql = Quote(copy->ToString());
++			}
++			filters += string(i ? "," : "") + "{\"index\":" + to_string(info.filter_index) +
++			           ",\"set\":" + RelationList(info.set.get()) + ",\"left_set\":" + OptionalSet(info.left_set) +
++			           ",\"right_set\":" + OptionalSet(info.right_set) +
++			           ",\"join_type\":" + Quote(JoinTypeToString(info.join_type)) +
++			           ",\"left_binding\":" + BindingJson(info.left_binding) +
++			           ",\"right_binding\":" + BindingJson(info.right_binding) + ",\"sql\":" + sql + "}";
++		}
++	}
++	filters += "]";
++
++	WriteLine("{\"ev\":\"invocation\",\"inv\":" + to_string(CurrentInvocation()) + ",\"parent\":" + to_string(parent) +
++	          ",\"depth\":" + to_string(depth) + ",\"reorderable\":" + (reorderable ? "true" : "false") +
++	          ",\"relations\":" + rels + ",\"filters\":" + filters + "}");
++}
++
++namespace {
++
++string PlanJson(const reference_map_t<JoinRelationSet, unique_ptr<DPJoinNode>> &plans, JoinRelationSet &set) {
++	if (set.count == 1) {
++		return to_string(set.relations[0]);
++	}
++	auto entry = plans.find(set);
++	if (entry == plans.end()) {
++		return "null";
++	}
++	auto &node = *entry->second;
++	return "{\"set\":" + CETrace::RelationList(set) + ",\"est\":" + to_string(node.cardinality) +
++	       ",\"cost\":" + CETrace::Number(node.cost) + ",\"left\":" + PlanJson(plans, node.left_set) +
++	       ",\"right\":" + PlanJson(plans, node.right_set) + "}";
++}
++
++} // namespace
++
++void CETrace::Plan(QueryGraphManager &qgm, const reference_map_t<JoinRelationSet, unique_ptr<DPJoinNode>> &plans) {
++	if (!Enabled()) {
++		return;
++	}
++	unordered_set<idx_t> bindings;
++	for (idx_t i = 0; i < qgm.relation_manager.NumRelations(); i++) {
++		bindings.insert(i);
++	}
++	auto &total = qgm.set_manager.GetJoinRelation(bindings);
++	WriteLine("{\"ev\":\"plan\",\"inv\":" + to_string(CurrentInvocation()) + ",\"seq\":" + to_string(NextSequence()) +
++	          ",\"tree\":" + PlanJson(plans, total) + "}");
++}
++
++CETraceInvocation::CETraceInvocation() {
++	if (!CETrace::Enabled()) {
++		return;
++	}
++	Frames().push_back({GetState().next_invocation++, 0});
++}
++
++CETraceInvocation::~CETraceInvocation() {
++	if (!CETrace::Enabled()) {
++		return;
++	}
++	Frames().pop_back();
++}
++
++CETraceCaller::CETraceCaller(const char *caller) : previous(CETrace::Caller()) {
++	CETrace::Caller() = caller;
++}
++
++CETraceCaller::~CETraceCaller() {
++	CETrace::Caller() = previous;
++}
++
++} // namespace duckdb
+diff --git a/src/optimizer/join_order/join_order_optimizer.cpp b/src/optimizer/join_order/join_order_optimizer.cpp
+index 39e60bd..334d9aa 100644
+--- a/src/optimizer/join_order/join_order_optimizer.cpp
++++ b/src/optimizer/join_order/join_order_optimizer.cpp
+@@ -3,6 +3,7 @@
+ #include "duckdb/common/enums/join_type.hpp"
+ #include "duckdb/common/limits.hpp"
+ #include "duckdb/common/pair.hpp"
++#include "duckdb/optimizer/join_order/ce_trace.hpp"
+ #include "duckdb/optimizer/join_order/cost_model.hpp"
+ #include "duckdb/optimizer/join_order/plan_enumerator.hpp"
+ #include "duckdb/planner/expression/list.hpp"
+@@ -33,6 +34,7 @@ unique_ptr<LogicalOperator> JoinOrderOptimizer::Optimize(unique_ptr<LogicalOpera
+ 		return plan;
+ 	}
+ 
++	CETraceInvocation ce_trace_invocation;
+ 	// make sure query graph manager has not extracted a relation graph already
+ 	LogicalOperator *op = plan.get();
+ 
+@@ -42,6 +44,7 @@ unique_ptr<LogicalOperator> JoinOrderOptimizer::Optimize(unique_ptr<LogicalOpera
+ 
+ 	// get relation_stats here since the reconstruction process will move all relations.
+ 	auto relation_stats = query_graph_manager.relation_manager.GetRelationStats();
++	CETrace::Graph(query_graph_manager, reorderable, depth);
+ 	unique_ptr<LogicalOperator> new_logical_plan = nullptr;
+ 
+ 	if (reorderable) {
+@@ -55,6 +58,7 @@ unique_ptr<LogicalOperator> JoinOrderOptimizer::Optimize(unique_ptr<LogicalOpera
+ 		// Initialize the leaf/single node plans
+ 		plan_enumerator.InitLeafPlans();
+ 		plan_enumerator.SolveJoinOrder();
++		CETrace::Plan(query_graph_manager, plan_enumerator.GetPlans());
+ 		// now reconstruct a logical plan from the query graph plan
+ 		query_graph_manager.plans = &plan_enumerator.GetPlans();
+ 
+diff --git a/src/optimizer/join_order/plan_enumerator.cpp b/src/optimizer/join_order/plan_enumerator.cpp
+index 07f1039..d74eeef 100644
+--- a/src/optimizer/join_order/plan_enumerator.cpp
++++ b/src/optimizer/join_order/plan_enumerator.cpp
+@@ -1,4 +1,5 @@
+ #include "duckdb/optimizer/join_order/plan_enumerator.hpp"
++#include "duckdb/optimizer/join_order/ce_trace.hpp"
+ 
+ #include "duckdb/main/client_context.hpp"
+ #include "duckdb/optimizer/join_order/join_node.hpp"
+@@ -464,6 +465,7 @@ void PlanEnumerator::InitLeafPlans() {
+ 		plans[relation_set] = std::move(join_node);
+ 		cost_model.cardinality_estimator.InitCardinalityEstimatorProps(&relation_set, stats);
+ 	}
++	cost_model.cardinality_estimator.TraceTotalDomains();
+ }
+ 
+ // the plan enumeration is a straight implementation of the paper "Dynamic Programming Strikes Back" by Guido
+@@ -473,10 +475,15 @@ void PlanEnumerator::SolveJoinOrder() {
+ 	bool force_no_cross_product = Settings::Get<DebugForceNoCrossProductSetting>(query_graph_manager.context);
+ 	// first try to solve the join order exactly
+ 	if (query_graph_manager.relation_manager.NumRelations() >= THRESHOLD_TO_SWAP_TO_APPROXIMATE) {
++		CETrace::Phase("greedy_threshold");
+ 		SolveJoinOrderApproximately();
+-	} else if (!SolveJoinOrderExactly()) {
+-		// otherwise, if that times out we resort to a greedy algorithm
+-		SolveJoinOrderApproximately();
++	} else {
++		CETrace::Phase("exact");
++		if (!SolveJoinOrderExactly()) {
++			// otherwise, if that times out we resort to a greedy algorithm
++			CETrace::Phase("greedy_pair_limit");
++			SolveJoinOrderApproximately();
++		}
+ 	}
+ 
+ 	// now the optimal join path should have been found
+@@ -495,6 +502,7 @@ void PlanEnumerator::SolveJoinOrder() {
+ 			throw InvalidInputException(
+ 			    "Query requires a cross-product, but 'force_no_cross_product' PRAGMA is enabled");
+ 		}
++		CETrace::Phase("cross_products");
+ 		GenerateCrossProducts();
+ 		//! solve the join order again, returning the final plan
+ 		return SolveJoinOrder();
