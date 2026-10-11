@@ -4,3 +4,6 @@
 [submodule "vendor/learnedcardinalities"]
 	path = vendor/learnedcardinalities
 	url = https://github.com/andreaskipf/learnedcardinalities.git
+[submodule "vendor/sorobn"]
+	path = vendor/sorobn
+	url = https://github.com/MaxHalford/sorobn.git
