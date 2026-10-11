@@ -1,6 +1,8 @@
 """Per-table Bayesian networks as base-relation estimators.
 
 Each table gets a Chow-Liu BN over the columns the workload filters on.
+Timestamps (as epoch seconds) and columns with many distinct values are
+discretized into quantile bins; the others stay exact.
 Join estimates keep DuckDB's formula, with BN base cardinalities:
 
     est(S) = Π card(R) / D(S)      D(S) = Π duckdb(R) / duckdb(S)
@@ -19,6 +21,7 @@ import sys
 import time
 
 import duckdb
+import pandas as pd
 import sorobn
 import sqlglot
 from sqlglot import exp
@@ -34,6 +37,10 @@ OPS = {
     exp.LTE: sorobn.Le,
 }
 
+# Columns with more distinct values than this are discretized.
+MAX_STATES = 1000
+N_BINS = 100
+
 # Table filters that never change a result (see ceq.SKIP_FILTERS).
 SKIP_FILTERS = {"OPTIONAL_FILTER", "DYNAMIC_FILTER", "BLOOM_FILTER"}
 
@@ -43,6 +50,13 @@ def conjuncts(node):
     if isinstance(node, exp.And):
         return conjuncts(node.left) + conjuncts(node.right)
     return [node]
+
+
+def literal(node):
+    """SQL literal -> Python value. Timestamps become epoch seconds."""
+    if isinstance(node, exp.Cast) and node.to.is_type(*exp.DataType.TEMPORAL_TYPES):
+        return pd.Timestamp(node.this.to_py()).timestamp()
+    return node.to_py()
 
 
 def predicates(filters):
@@ -61,17 +75,30 @@ def predicates(filters):
                 raise ValueError(f"unsupported filter: {node.sql()}")
 
             col = node.this.name
-            pred = op(node.expression.to_py())
+            pred = op(literal(node.expression))
             preds[col] = preds[col] & pred if col in preds else pred
     return preds
 
 
 def fit(con, table, cols):
     """Chow-Liu BN over cols of table, fitted on the full table."""
-    df = con.execute(f'SELECT {", ".join(cols)} FROM "{table}"').df()
+    exprs, schemes = [], {}
+    for col in cols:
+        typ, ndv = con.execute(f'SELECT typeof(any_value("{col}")), count(DISTINCT "{col}") FROM "{table}"').fetchone()
+        temporal = typ.startswith("TIMESTAMP") or typ == "DATE"
+        exprs.append(f'epoch("{col}") AS "{col}"' if temporal else f'"{col}"')
+        if temporal or ndv > MAX_STATES:
+            schemes[col] = sorobn.Discretizer(n_bins=N_BINS)
+    df = con.execute(f'SELECT {", ".join(exprs)} FROM "{table}"').df()
+
     if len(cols) == 1:
-        return sorobn.BayesNet(cols[0]).fit(df)
-    return sorobn.BayesNet(*sorobn.structure.chow_liu(df)).fit(df)
+        return sorobn.BayesNet(cols[0], discretizers=schemes).fit(df)
+
+    # Structure learning needs discrete data: bin a copy.
+    binned = df.copy()
+    for col, scheme in schemes.items():
+        binned[col] = scheme.fit_transform(df[col])
+    return sorobn.BayesNet(*sorobn.structure.chow_liu(binned), discretizers=schemes).fit(df)
 
 
 def combine(questions, duck, card):
