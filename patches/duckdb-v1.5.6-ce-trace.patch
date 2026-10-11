@@ -194,10 +194,10 @@ index f09070c..17ec1d5 100644
  void CardinalityEstimator::AddRelationNamesToRelationStats(vector<RelationStats> &stats) {
 diff --git a/src/optimizer/join_order/ce_trace.cpp b/src/optimizer/join_order/ce_trace.cpp
 new file mode 100644
-index 0000000..9316513
+index 0000000..40dc658
 --- /dev/null
 +++ b/src/optimizer/join_order/ce_trace.cpp
-@@ -0,0 +1,373 @@
+@@ -0,0 +1,448 @@
 +#include "duckdb/optimizer/join_order/ce_trace.hpp"
 +
 +#include "duckdb/catalog/catalog_entry/table_catalog_entry.hpp"
@@ -209,6 +209,9 @@ index 0000000..9316513
 +#include "duckdb/parser/keyword_helper.hpp"
 +#include "duckdb/planner/expression/bound_columnref_expression.hpp"
 +#include "duckdb/planner/expression_iterator.hpp"
++#include "duckdb/planner/operator/logical_column_data_get.hpp"
++#include "duckdb/planner/operator/logical_comparison_join.hpp"
++#include "duckdb/planner/operator/logical_filter.hpp"
 +#include "duckdb/planner/operator/logical_get.hpp"
 +#include "duckdb/planner/table_filter.hpp"
 +
@@ -264,44 +267,62 @@ index 0000000..9316513
 +	return current.get();
 +}
 +
-+optional_ptr<LogicalGet> TableGet(LogicalOperator &base, const vector<LogicalOperatorType> &chain) {
-+	if (base.type != LogicalOperatorType::LOGICAL_GET || !base.children.empty()) {
-+		return nullptr;
++//! MARK join against a constant list: how DuckDB rewrites `x IN (c1, ..., cn)`, n >= 5
++bool IsInListJoin(LogicalOperator &op) {
++	if (op.type != LogicalOperatorType::LOGICAL_COMPARISON_JOIN) {
++		return false;
 +	}
-+	for (auto type : chain) {
-+		if (type != LogicalOperatorType::LOGICAL_FILTER) {
-+			return nullptr;
++	auto &join = op.Cast<LogicalComparisonJoin>();
++	return join.join_type == JoinType::MARK && join.conditions.size() == 1 &&
++	       join.conditions[0].comparison == ExpressionType::COMPARE_EQUAL &&
++	       join.children[1]->type == LogicalOperatorType::LOGICAL_CHUNK_GET;
++}
++
++//! A relation that is a table scan, possibly under filters and IN-list joins
++struct TableScan {
++	optional_ptr<LogicalGet> get;
++	//! Expressions left in FILTER operators. ExtractEdges has already moved the
++	//! others into query graph filters, except those it cannot bind (e.g. a mark
++	//! column projected away by its FILTER).
++	vector<reference<Expression>> filters;
++};
++
++bool FindTable(LogicalOperator &op, TableScan &scan) {
++	switch (op.type) {
++	case LogicalOperatorType::LOGICAL_FILTER:
++		for (auto &expr : op.expressions) {
++			scan.filters.push_back(*expr);
++		}
++		return FindTable(*op.children[0], scan);
++	case LogicalOperatorType::LOGICAL_GET:
++		scan.get = &op.Cast<LogicalGet>();
++		return op.children.empty() && scan.get->GetTable();
++	case LogicalOperatorType::LOGICAL_COMPARISON_JOIN:
++		return IsInListJoin(op) && FindTable(*op.children[0], scan);
++	default:
++		return false;
++	}
++}
++
++//! Operator in op's subtree that defines the bindings of table_index
++optional_ptr<LogicalOperator> FindDefinition(LogicalOperator &op, idx_t table_index) {
++	if (op.type == LogicalOperatorType::LOGICAL_GET && op.Cast<LogicalGet>().table_index == table_index) {
++		return &op;
++	}
++	if (IsInListJoin(op) && op.Cast<LogicalComparisonJoin>().mark_index == table_index) {
++		return &op;
++	}
++	for (auto &child : op.children) {
++		auto result = FindDefinition(*child, table_index);
++		if (result) {
++			return result;
 +		}
 +	}
-+	auto &get = base.Cast<LogicalGet>();
-+	if (!get.GetTable()) {
-+		return nullptr;
-+	}
-+	return &get;
++	return nullptr;
 +}
 +
 +string Alias(idx_t relation_id, const string &column) {
 +	return "r" + to_string(relation_id) + "." + KeywordHelper::WriteOptionallyQuoted(column);
-+}
-+
-+//! Name of an original column binding, as r<relation>.<column>
-+string BindingName(QueryGraphManager &qgm, const vector<unique_ptr<SingleJoinRelation>> &relations,
-+                   const ColumnBinding &binding) {
-+	auto entry = qgm.relation_manager.relation_mapping.find(binding.table_index);
-+	if (entry == qgm.relation_manager.relation_mapping.end()) {
-+		return "unmapped_" + to_string(binding.table_index) + "_" + to_string(binding.column_index);
-+	}
-+	auto relation_id = entry->second;
-+	vector<LogicalOperatorType> chain;
-+	auto &base = BaseOperator(relations[relation_id]->op, chain);
-+	if (base.type == LogicalOperatorType::LOGICAL_GET) {
-+		auto &get = base.Cast<LogicalGet>();
-+		auto &column_ids = get.GetColumnIds();
-+		if (get.table_index == binding.table_index && binding.column_index < column_ids.size()) {
-+			return Alias(relation_id, get.GetColumnName(column_ids[binding.column_index]));
-+		}
-+	}
-+	return Alias(relation_id, "col_" + to_string(binding.table_index) + "_" + to_string(binding.column_index));
 +}
 +
 +void RewriteColumnRefs(Expression &expr, const std::function<string(const ColumnBinding &)> &namer) {
@@ -310,6 +331,56 @@ index 0000000..9316513
 +		colref.SetAlias(namer(colref.binding));
 +	}
 +	ExpressionIterator::EnumerateChildren(expr, [&](Expression &child) { RewriteColumnRefs(child, namer); });
++}
++
++string ToSQL(const Expression &expr, const std::function<string(const ColumnBinding &)> &namer) {
++	auto copy = expr.Copy();
++	RewriteColumnRefs(*copy, namer);
++	return copy->ToString();
++}
++
++//! A binding as SQL: r<relation>.<column>, or `(lhs IN (...))` for an IN-list mark column
++string BindingName(QueryGraphManager &qgm, const vector<unique_ptr<SingleJoinRelation>> &relations,
++                   const ColumnBinding &binding) {
++	// Bindings projected away inside a relation are not in relation_mapping: search.
++	idx_t relation_id = DConstants::INVALID_INDEX;
++	optional_ptr<LogicalOperator> def;
++	auto entry = qgm.relation_manager.relation_mapping.find(binding.table_index);
++	for (idx_t i = 0; i < relations.size() && !def; i++) {
++		if (entry != qgm.relation_manager.relation_mapping.end() && entry->second != i) {
++			continue;
++		}
++		relation_id = i;
++		def = FindDefinition(relations[i]->op, binding.table_index);
++	}
++	if (relation_id == DConstants::INVALID_INDEX || (!def && entry == qgm.relation_manager.relation_mapping.end())) {
++		return "unmapped_" + to_string(binding.table_index) + "_" + to_string(binding.column_index);
++	}
++	auto fallback = Alias(relation_id, "col_" + to_string(binding.table_index) + "_" + to_string(binding.column_index));
++	if (!def) {
++		return fallback;
++	}
++
++	if (def->type == LogicalOperatorType::LOGICAL_GET) {
++		auto &get = def->Cast<LogicalGet>();
++		auto &column_ids = get.GetColumnIds();
++		if (binding.column_index >= column_ids.size()) {
++			return fallback;
++		}
++		return Alias(relation_id, get.GetColumnName(column_ids[binding.column_index]));
++	}
++
++	// IN-list mark column, e.g. (r3.keyword IN ('murder', 'blood'))
++	auto &join = def->Cast<LogicalComparisonJoin>();
++	auto namer = [&](const ColumnBinding &b) {
++		return BindingName(qgm, relations, b);
++	};
++	string values;
++	auto &collection = *join.children[1]->Cast<LogicalColumnDataGet>().collection;
++	for (auto &row : collection.Rows()) {
++		values += (values.empty() ? "" : ", ") + row.GetValue(0).ToSQLString();
++	}
++	return "(" + ToSQL(*join.conditions[0].left, namer) + " IN (" + values + "))";
 +}
 +
 +string BindingJson(const ColumnBinding &binding) {
@@ -437,7 +508,8 @@ index 0000000..9316513
 +		auto &relation = *relations[rel_id];
 +		vector<LogicalOperatorType> chain;
 +		auto &base = BaseOperator(relation.op, chain);
-+		auto get = TableGet(base, chain);
++		TableScan scan;
++		auto get = FindTable(relation.op, scan) ? scan.get : nullptr;
 +
 +		string rel = "{\"id\":" + to_string(rel_id) + ",\"kind\":" + Quote(get ? "table" : "derived") +
 +		             ",\"op\":" + Quote(LogicalOperatorToString(base.type));
@@ -475,6 +547,11 @@ index 0000000..9316513
 +				first = false;
 +			}
 +			rel += ",\"table_filters\":" + filters + "]";
++			string scan_filters = "[";
++			for (idx_t i = 0; i < scan.filters.size(); i++) {
++				scan_filters += string(i ? "," : "") + Quote(ToSQL(scan.filters[i].get(), namer));
++			}
++			rel += ",\"filters\":" + scan_filters + "]";
 +		}
 +
 +		auto &stats = relation.stats;
@@ -498,9 +575,7 @@ index 0000000..9316513
 +			auto &info = *filter_infos[i];
 +			string sql = "null";
 +			if (info.filter) {
-+				auto copy = info.filter->Copy();
-+				RewriteColumnRefs(*copy, namer);
-+				sql = Quote(copy->ToString());
++				sql = Quote(ToSQL(*info.filter, namer));
 +			}
 +			filters += string(i ? "," : "") + "{\"index\":" + to_string(info.filter_index) +
 +			           ",\"set\":" + RelationList(info.set.get()) + ",\"left_set\":" + OptionalSet(info.left_set) +

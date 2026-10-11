@@ -6,6 +6,7 @@
     uv run ceq.py check  <db> <out>              plans unchanged, full-join counts match
 
 <workload> is a .sql file with one query per line, or a directory of .sql files.
+A line may be "<true count>||<sql>" (STATS-CEB): check compares against it.
 """
 
 import json
@@ -17,6 +18,8 @@ import threading
 import time
 
 import duckdb
+import sqlglot
+from sqlglot import exp
 
 ROOT = pathlib.Path(__file__).parent
 PATCHED = ROOT / "vendor/duckdb/build/release/duckdb"
@@ -30,9 +33,17 @@ SKIP_FILTERS = {"OPTIONAL_FILTER", "DYNAMIC_FILTER", "BLOOM_FILTER"}
 def read_workload(path):
     path = pathlib.Path(path)
     if path.is_dir():
-        return [(p.stem, p.read_text().strip()) for p in sorted(path.glob("*.sql"))]
+        return [{"query": p.stem, "sql": p.read_text().strip()} for p in sorted(path.glob("*.sql"))]
+
+    queries = []
     lines = [l.strip() for l in path.read_text().splitlines() if l.strip()]
-    return [(f"{i:03d}", l) for i, l in enumerate(lines, 1)]
+    for i, line in enumerate(lines, 1):
+        q = {"query": f"{i:03d}", "sql": line}
+        if "||" in line:
+            count, q["sql"] = line.split("||", 1)
+            q["expected"] = int(count)
+        queries.append(q)
+    return queries
 
 
 def read_jsonl(path):
@@ -59,11 +70,11 @@ def trace(workload, db, out):
     out = pathlib.Path(out)
     (out / "traces").mkdir(parents=True, exist_ok=True)
     queries = read_workload(workload)
-    for qid, sql in queries:
-        path = out / "traces" / f"{qid}.jsonl"
+    for q in queries:
+        path = out / "traces" / f"{q['query']}.jsonl"
         path.unlink(missing_ok=True)
-        explain(PATCHED, db, sql, trace=path)
-    write_jsonl(out / "queries.jsonl", [{"query": q, "sql": s} for q, s in queries])
+        explain(PATCHED, db, q["sql"], trace=path)
+    write_jsonl(out / "queries.jsonl", queries)
 
 
 def count_sql(inv, rels, qset):
@@ -80,6 +91,7 @@ def count_sql(inv, rels, qset):
             if f["sql"] is None:
                 return None, "unrenderable_filter"
             preds.append(f["sql"])
+        preds += rels[r]["filters"]
 
     for f in inv["filters"]:
         if not set(f["set"]) <= set(qset):
@@ -177,6 +189,14 @@ def truth(db, out):
     write_jsonl(out / "questions.jsonl", questions)
 
 
+def count_query(sql):
+    """Replace the SELECT list by COUNT(*), or None if that changes the row count."""
+    tree = sqlglot.parse_one(sql, read="duckdb")
+    if not isinstance(tree, exp.Select) or tree.args.get("group") or tree.args.get("distinct"):
+        return None
+    return tree.select(exp.Count(this=exp.Star()), append=False).sql(dialect="duckdb")
+
+
 def check(db, out):
     out = pathlib.Path(out)
     queries = read_jsonl(out / "queries.jsonl")
@@ -191,13 +211,16 @@ def check(db, out):
             print(f"{q['query']}: plan differs from baseline")
             bad += 1
 
-    # 2. The largest question of a COUNT(*) query must equal the query result.
+    # 2. The full join's true count must equal the published count, or the
+    #    query rerun as COUNT(*).
     n_rels = {}
     for r in rels:
         k = (r["query"], r["inv"])
         n_rels[k] = n_rels.get(k, 0) + 1
     for q in queries:
-        if not q["sql"].upper().startswith("SELECT COUNT(*)"):
+        sql = count_query(q["sql"])
+        if sql is None:
+            print(f"{q['query']}: skipped, no COUNT(*) form")
             continue
         full = [x for x in questions if x["query"] == q["query"] and len(x["set"]) == n_rels[(x["query"], x["inv"])] > 1]
         if len(full) != 1:
@@ -207,9 +230,9 @@ def check(db, out):
         if full[0]["status"] != "ok":
             print(f"{q['query']}: skipped, full join is {full[0]['status']}")
             continue
-        actual = con.execute(q["sql"]).fetchone()[0]
+        actual = q["expected"] if "expected" in q else con.execute(sql).fetchone()[0]
         if full[0]["true"] != actual:
-            print(f"{q['query']}: full join {full[0]['true']} != query result {actual}")
+            print(f"{q['query']}: full join {full[0]['true']} != expected {actual}")
             bad += 1
 
     print(f"{len(queries)} queries, {bad} problems")

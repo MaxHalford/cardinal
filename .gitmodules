@@ -7,3 +7,9 @@
 [submodule "vendor/sorobn"]
 	path = vendor/sorobn
 	url = https://github.com/MaxHalford/sorobn.git
+[submodule "vendor/join-order-benchmark"]
+	path = vendor/join-order-benchmark
+	url = https://github.com/gregrahn/join-order-benchmark.git
+[submodule "vendor/cardest-benchmark"]
+	path = vendor/cardest-benchmark
+	url = https://github.com/Nathaniel-Han/End-to-End-CardEst-Benchmark.git
