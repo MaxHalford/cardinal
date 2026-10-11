@@ -2,17 +2,18 @@
 
 Each table gets a Chow-Liu BN over the columns the workload filters on.
 Columns with many distinct values are compacted: frequent values stay
-exact, the rest share an OTHER state estimated with heuristics. BNs are
-fitted from GROUP BY counts, so each distinct combination is loaded once.
+exact, the rest share an OTHER state estimated with heuristics.
 Join estimates keep DuckDB's formula, with BN base cardinalities:
 
     est(S) = Π card(R) / D(S)      D(S) = Π duckdb(R) / duckdb(S)
 
-    uv run bn.py <db> <out> [states]
+    uv run bn.py <db> <out> [limit]
 
-states caps the states per column (default 1000).
+limit applies to columns with more than 1000 distinct values. An integer
+caps their states (max_categories, default 1000). A fraction keeps values
+covering at least that share of rows (min_frequency).
 
-Writes <out>/estimates/bn_s<states>.jsonl and true_base.jsonl.
+Writes <out>/estimates/bn_<limit>.jsonl and true_base.jsonl.
 true_base uses true base cardinalities: the best any per-table estimator can
 do with this formula.
 """
@@ -43,7 +44,8 @@ OPS = {
     exp.LTE: sorobn.Le,
 }
 
-STATES = 1000
+# Columns with more distinct values than this are compacted.
+MAX_STATES = 1000
 
 # Inclusion-exclusion over more terms than this is too slow.
 MAX_TERMS = 10
@@ -129,30 +131,38 @@ def probability(net, filters):
     return total
 
 
-def fit(con, table, cols, states):
-    """Chow-Liu BN over cols of table, fitted from GROUP BY counts."""
+def compactor(limit):
+    if isinstance(limit, float):
+        return sorobn.Compactor(min_frequency=limit)
+    return sorobn.Compactor(max_categories=limit)
+
+
+def fit(con, table, cols, limit):
+    """Chow-Liu BN over cols of table, fitted on the full table."""
     exprs, compactors = [], {}
     for col in cols:
         typ, ndv = con.execute(f'SELECT typeof(any_value("{col}")), count(DISTINCT "{col}") FROM "{table}"').fetchone()
         temporal = typ.startswith("TIMESTAMP") or typ == "DATE"
         exprs.append(f'epoch("{col}") AS "{col}"' if temporal else f'"{col}"')
-        if ndv > states:
-            compactors[col] = sorobn.Compactor(max_categories=states)
-    df = con.execute(f'SELECT {", ".join(exprs)}, count(*) AS n FROM "{table}" GROUP BY ALL').df()
+        if ndv > MAX_STATES:
+            compactors[col] = compactor(limit)
+    # Shuffle: Compactor breaks frequency ties by first appearance, and the OTHER
+    # heuristic needs frequent values that are representative, not the first
+    # rows of a table stored in sorted order.
+    df = con.execute(f'SELECT {", ".join(exprs)} FROM "{table}"').df().sample(frac=1, random_state=0)
 
     # Compactor only takes categoricals. Numbers stay numbers: ranges still work.
     for col in compactors:
         df[col] = df[col].astype("category")
 
     if len(cols) == 1:
-        return sorobn.BayesNet(cols[0], compactors=compactors).fit(df, weights="n")
+        return sorobn.BayesNet(cols[0], compactors=compactors).fit(df)
 
     # Structure learning needs few states: compact a copy.
-    small = df[cols].copy()
+    small = df.copy()
     for col, scheme in compactors.items():
-        small[col] = scheme.fit(df[col], weights=df["n"]).transform(df[col])
-    edges = sorobn.structure.chow_liu(small, weights=df["n"])
-    return sorobn.BayesNet(*edges, compactors=compactors).fit(df, weights="n")
+        small[col] = scheme.fit_transform(df[col])
+    return sorobn.BayesNet(*sorobn.structure.chow_liu(small), compactors=compactors).fit(df)
 
 
 def combine(questions, duck, card):
@@ -187,9 +197,10 @@ def local_filters(out):
     return result
 
 
-def main(db, out, states=STATES):
+def main(db, out, limit=str(MAX_STATES)):
     out = pathlib.Path(out)
-    states = int(states)
+    name = f"bn_{limit}"
+    limit = float(limit) if "." in limit else int(limit)
     questions = [q for q in read_jsonl(out / "questions.jsonl") if q["status"] == "ok"]
     locals_ = local_filters(out)
     con = duckdb.connect(db, read_only=True)
@@ -201,9 +212,10 @@ def main(db, out, states=STATES):
             cols[table] |= {col.strip('"') for _, col in COLUMN.findall(sql)}
 
     start = time.time()
-    nets = {t: fit(con, t, sorted(c), states) for t, c in cols.items() if c}
+    nets = {t: fit(con, t, sorted(c), limit) for t, c in cols.items() if c}
     size = sum(len(pickle.dumps(n)) for n in nets.values())
-    print(f"fit {len(nets)} BNs in {time.time() - start:.1f}s, {size / 1e6:.2f} MB", file=sys.stderr)
+    kept = sum(len(c.frequent_values_) for n in nets.values() for c in n.compactors.values())
+    print(f"fit {len(nets)} BNs in {time.time() - start:.1f}s, {size / 1e6:.2f} MB, {kept} kept values", file=sys.stderr)
 
     # Base cardinalities: DuckDB's, BN's, and true.
     duck, bn, true = {}, {}, {}
@@ -218,7 +230,6 @@ def main(db, out, states=STATES):
             true[(q["query"], q["inv"], q["set"][0])] = q["true"]
 
     (out / "estimates").mkdir(exist_ok=True)
-    name = f"bn_s{states}"
     write_jsonl(out / f"estimates/{name}.jsonl", combine(questions, duck, bn))
     write_jsonl(out / "estimates/true_base.jsonl", combine(questions, duck, true))
 
