@@ -1,8 +1,9 @@
 """Per-table Bayesian networks as base-relation estimators.
 
 Each table gets a Chow-Liu BN over the columns the workload filters on.
-Timestamps (as epoch seconds) and columns with many distinct values are
-discretized into quantile bins; the others stay exact.
+Columns with many distinct values are compacted: frequent values stay
+exact, the rest share an OTHER state split by observed counts. Fitted on
+the full table, so every single-column marginal stays exact.
 Join estimates keep DuckDB's formula, with BN base cardinalities:
 
     est(S) = Π card(R) / D(S)      D(S) = Π duckdb(R) / duckdb(S)
@@ -14,9 +15,10 @@ cardinalities: the best any per-table estimator can do with this formula.
 """
 
 import collections
-import json
+import itertools
 import math
 import pathlib
+import re
 import sys
 import time
 
@@ -26,7 +28,7 @@ import sorobn
 import sqlglot
 from sqlglot import exp
 
-from ceq import read_jsonl, write_jsonl
+from ceq import COLUMN, question_parts, read_jsonl, write_jsonl
 
 OPS = {
     exp.EQ: sorobn.Eq,
@@ -37,19 +39,11 @@ OPS = {
     exp.LTE: sorobn.Le,
 }
 
-# Columns with more distinct values than this are discretized.
+# Columns with more distinct values than this are compacted.
 MAX_STATES = 1000
-N_BINS = 100
 
-# Table filters that never change a result (see ceq.SKIP_FILTERS).
-SKIP_FILTERS = {"OPTIONAL_FILTER", "DYNAMIC_FILTER", "BLOOM_FILTER"}
-
-
-def conjuncts(node):
-    node = node.unnest()
-    if isinstance(node, exp.And):
-        return conjuncts(node.left) + conjuncts(node.right)
-    return [node]
+# Inclusion-exclusion over more terms than this is too slow.
+MAX_TERMS = 10
 
 
 def literal(node):
@@ -59,46 +53,102 @@ def literal(node):
     return node.to_py()
 
 
-def predicates(filters):
-    """Table filters -> {column: sorobn predicate}, ANDed per column.
+def predicate(node):
+    """Expression over one column -> sorobn predicate."""
+    node = node.unnest()
 
-    e.g. ['((r1.y > 2005.0) AND (r1.y < 2010.0))'] -> {'y': Gt(2005.0) & Lt(2010.0)}
+    if isinstance(node, exp.And):
+        return predicate(node.left) & predicate(node.right)
+    if isinstance(node, exp.Or):
+        return predicate(node.left) | predicate(node.right)
+    if isinstance(node, exp.Not):
+        return ~predicate(node.this)
+
+    if type(node) in OPS and isinstance(node.this, exp.Column):
+        return OPS[type(node)](literal(node.expression))
+    if isinstance(node, exp.In):
+        return sorobn.In([literal(e) for e in node.expressions])
+    if isinstance(node, exp.Is) and isinstance(node.expression, exp.Null):
+        return sorobn.IsNull()
+    if isinstance(node, exp.Like):
+        pred = sorobn.Like(literal(node.expression))
+        return ~pred if node.args.get("negate") else pred
+
+    # DuckDB rewrites simple LIKE patterns into these functions.
+    if isinstance(node, exp.Contains):
+        return sorobn.Regex(re.escape(literal(node.expression)))
+    if isinstance(node, exp.Anonymous) and node.name in ("prefix", "suffix"):
+        text = re.escape(literal(node.expressions[1]))
+        return sorobn.Regex("^" + text if node.name == "prefix" else text + "$")
+
+    raise ValueError(f"unsupported filter: {node.sql()}")
+
+
+def merge(a, b):
+    """AND two conjunctions {column: predicate}."""
+    out = dict(a)
+    for col, pred in b.items():
+        out[col] = out[col] & pred if col in out else pred
+    return out
+
+
+def dnf(node):
+    """Expression -> list of conjunctions {column: predicate}, ORed.
+
+    e.g. (g = 'm') OR (g = 'f' AND name LIKE 'A%') -> [{g: m}, {g: f, name: A%}]
     """
-    preds = {}
-    for f in filters:
-        if f["type"] in SKIP_FILTERS:
-            continue
+    node = node.unnest()
+    cols = {c.name for c in node.find_all(exp.Column)}
+    if len(cols) == 1:
+        return [{cols.pop(): predicate(node)}]
+    if isinstance(node, exp.And):
+        return [merge(a, b) for a in dnf(node.left) for b in dnf(node.right)]
+    if isinstance(node, exp.Or):
+        return dnf(node.left) + dnf(node.right)
+    raise ValueError(f"unsupported filter: {node.sql()}")
 
-        for node in conjuncts(sqlglot.parse_one(f["sql"], read="duckdb")):
-            op = OPS.get(type(node))
-            if op is None or not isinstance(node.this, exp.Column):
-                raise ValueError(f"unsupported filter: {node.sql()}")
 
-            col = node.this.name
-            pred = op(literal(node.expression))
-            preds[col] = preds[col] & pred if col in preds else pred
-    return preds
+def probability(net, filters):
+    """P(all filters), by inclusion-exclusion over their DNF terms."""
+    terms = [{}]
+    for sql in filters:
+        terms = [merge(a, b) for a in terms for b in dnf(sqlglot.parse_one(sql, read="duckdb"))]
+    if len(terms) > MAX_TERMS:
+        raise ValueError(f"{len(terms)} DNF terms")
+
+    total = 0.0
+    for k in range(1, len(terms) + 1):
+        for subset in itertools.combinations(terms, k):
+            event = {}
+            for t in subset:
+                event = merge(event, t)
+            total += (-1) ** (k + 1) * (net.probability(event) if event else 1.0)
+    return total
 
 
 def fit(con, table, cols):
     """Chow-Liu BN over cols of table, fitted on the full table."""
-    exprs, schemes = [], {}
+    exprs, compactors = [], {}
     for col in cols:
         typ, ndv = con.execute(f'SELECT typeof(any_value("{col}")), count(DISTINCT "{col}") FROM "{table}"').fetchone()
         temporal = typ.startswith("TIMESTAMP") or typ == "DATE"
         exprs.append(f'epoch("{col}") AS "{col}"' if temporal else f'"{col}"')
-        if temporal or ndv > MAX_STATES:
-            schemes[col] = sorobn.Discretizer(n_bins=N_BINS)
+        if ndv > MAX_STATES:
+            compactors[col] = sorobn.Compactor(max_categories=MAX_STATES, disaggregation="empirical")
     df = con.execute(f'SELECT {", ".join(exprs)} FROM "{table}"').df()
 
-    if len(cols) == 1:
-        return sorobn.BayesNet(cols[0], discretizers=schemes).fit(df)
+    # Compactor only takes categoricals. Numbers stay numbers: ranges still work.
+    for col in compactors:
+        df[col] = df[col].astype("category")
 
-    # Structure learning needs discrete data: bin a copy.
-    binned = df.copy()
-    for col, scheme in schemes.items():
-        binned[col] = scheme.fit_transform(df[col])
-    return sorobn.BayesNet(*sorobn.structure.chow_liu(binned), discretizers=schemes).fit(df)
+    if len(cols) == 1:
+        return sorobn.BayesNet(cols[0], compactors=compactors).fit(df)
+
+    # Structure learning needs few states: compact a copy.
+    small = df.copy()
+    for col, scheme in compactors.items():
+        small[col] = scheme.fit_transform(df[col])
+    return sorobn.BayesNet(*sorobn.structure.chow_liu(small), compactors=compactors).fit(df)
 
 
 def combine(questions, duck, card):
@@ -106,25 +156,44 @@ def combine(questions, duck, card):
     rows = []
     for q in questions:
         keys = [(q["query"], q["inv"], r) for r in q["set"]]
-        if q["est"] == 0:
-            rows.append(q | {"est": 0.0})
-            continue
-
-        denom = math.prod(duck[k] for k in keys) / q["est"]
-        rows.append({k: q[k] for k in ("query", "inv", "set")} | {"est": math.prod(card[k] for k in keys) / denom})
+        est = 0.0
+        if q["est"] > 0:
+            denom = math.prod(duck[k] for k in keys) / q["est"]
+            est = math.prod(card[k] for k in keys) / denom
+        rows.append({k: q[k] for k in ("query", "inv", "set")} | {"est": est})
     return rows
+
+
+def local_filters(out):
+    """{(query, inv, relation): (table, base rows, DuckDB estimate, filter SQL)}."""
+    graphs = collections.defaultdict(lambda: ([], []))
+    for r in read_jsonl(out / "relations.jsonl"):
+        graphs[(r["query"], r["inv"])][0].append(r)
+    for e in read_jsonl(out / "edges.jsonl"):
+        graphs[(e["query"], e["inv"])][1].append(e)
+
+    result = {}
+    for (q, inv), (rels, edges) in graphs.items():
+        rels.sort(key=lambda r: r["id"])
+        for r in rels:
+            parts, status = question_parts({"filters": edges}, rels, [r["id"]])
+            if status != "ok":
+                continue
+            result[(q, inv, r["id"])] = (r["table"], r["base_rows"], r["est"], parts[0][r["id"]])
+    return result
 
 
 def main(db, out):
     out = pathlib.Path(out)
-    rels = [r for r in read_jsonl(out / "relations.jsonl") if r["kind"] == "table"]
     questions = [q for q in read_jsonl(out / "questions.jsonl") if q["status"] == "ok"]
+    locals_ = local_filters(out)
     con = duckdb.connect(db, read_only=True)
 
     # Columns each table is filtered on, across the workload.
     cols = collections.defaultdict(set)
-    for r in rels:
-        cols[r["table"]] |= set(predicates(r["table_filters"]))
+    for table, _, _, filters in locals_.values():
+        for sql in filters:
+            cols[table] |= {col.strip('"') for _, col in COLUMN.findall(sql)}
 
     start = time.time()
     nets = {t: fit(con, t, sorted(c)) for t, c in cols.items() if c}
@@ -133,12 +202,10 @@ def main(db, out):
     # Base cardinalities: DuckDB's, BN's, and true.
     duck, bn, true = {}, {}, {}
     start = time.time()
-    for r in rels:
-        k = (r["query"], r["inv"], r["id"])
-        preds = predicates(r["table_filters"])
-        sel = nets[r["table"]].probability(preds) if preds else 1.0
-        duck[k], bn[k] = r["est"], r["base_rows"] * sel
-    print(f"{len(rels)} base estimates in {time.time() - start:.2f}s", file=sys.stderr)
+    for k, (table, rows, est, filters) in locals_.items():
+        sel = probability(nets[table], filters) if filters else 1.0
+        duck[k], bn[k] = est, rows * sel
+    print(f"{len(locals_)} base estimates in {time.time() - start:.2f}s", file=sys.stderr)
 
     for q in questions:
         if len(q["set"]) == 1:

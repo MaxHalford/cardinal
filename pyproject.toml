@@ -4,6 +4,7 @@ version = "0.1.0"
 requires-python = ">=3.13"
 dependencies = [
     "duckdb==1.5.6",
+    "pandas==2.3.3",
     "sorobn",
     "sqlglot==30.22.0",
 ]
