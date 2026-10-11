@@ -9,9 +9,9 @@ Join estimates keep DuckDB's formula, with BN base cardinalities:
 
     uv run bn.py <db> <out> [limit]
 
-limit applies to columns with more than 1000 distinct values. An integer
-caps their states (max_categories, default 1000). A fraction keeps values
-covering at least that share of rows (min_frequency).
+limit applies to columns with more than 1000 distinct values. It holds
+sorobn Compactor arguments, e.g. "max_categories=1000,coverage=0.9,min_frequency=10".
+The default is "max_categories=1000".
 
 Writes <out>/estimates/bn_<limit>.jsonl and true_base.jsonl.
 true_base uses true base cardinalities: the best any per-table estimator can
@@ -132,9 +132,12 @@ def probability(net, filters):
 
 
 def compactor(limit):
-    if isinstance(limit, float):
-        return sorobn.Compactor(min_frequency=limit)
-    return sorobn.Compactor(max_categories=limit)
+    """'max_categories=1000,coverage=0.9' -> Compactor(max_categories=1000, coverage=0.9)."""
+    kwargs = {}
+    for part in limit.split(","):
+        key, value = part.split("=")
+        kwargs[key] = float(value) if "." in value else int(value)
+    return sorobn.Compactor(**kwargs)
 
 
 def fit(con, table, cols, limit):
@@ -197,10 +200,9 @@ def local_filters(out):
     return result
 
 
-def main(db, out, limit=str(MAX_STATES)):
+def main(db, out, limit=f"max_categories={MAX_STATES}"):
     out = pathlib.Path(out)
     name = f"bn_{limit}"
-    limit = float(limit) if "." in limit else int(limit)
     questions = [q for q in read_jsonl(out / "questions.jsonl") if q["status"] == "ok"]
     locals_ = local_filters(out)
     con = duckdb.connect(db, read_only=True)
