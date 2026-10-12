@@ -9,6 +9,7 @@
 A line may be "<true count>||<sql>" (STATS-CEB): check compares against it.
 """
 
+import concurrent.futures
 import json
 import os
 import pathlib
@@ -26,6 +27,7 @@ ROOT = pathlib.Path(__file__).parent
 PATCHED = ROOT / "vendor/duckdb/build/release/duckdb"
 BASELINE = ROOT / "vendor/bin/duckdb-v1.5.6-baseline"
 TIMEOUT = 600  # seconds per true count
+TRUTH_WORKERS = 4  # true counts run at once
 
 # Table filters that never change a result: hints, or runtime-only.
 SKIP_FILTERS = {"OPTIONAL_FILTER", "DYNAMIC_FILTER", "BLOOM_FILTER"}
@@ -222,10 +224,16 @@ def truth(db, out):
     fast = {q["sql"]: q["fast_sql"] for q in questions if q["status"] == "ok"}
     todo = sorted(fast.keys() - cache.keys())
     con = duckdb.connect(str(db), read_only=True)
+    cursors = threading.local()
 
-    with open(cache_path, "a") as f:
-        for i, sql in enumerate(todo, 1):
-            n, secs = run_count(con, fast[sql])
+    # Counts are independent: run several at once, one cursor per thread.
+    def count(sql):
+        if not hasattr(cursors, "con"):
+            cursors.con = con.cursor()
+        return sql, run_count(cursors.con, fast[sql])
+
+    with open(cache_path, "a") as f, concurrent.futures.ThreadPoolExecutor(TRUTH_WORKERS) as pool:
+        for i, (sql, (n, secs)) in enumerate(pool.map(count, todo), 1):
             cache[sql] = {"sql": sql, "true": n, "seconds": round(secs, 3)}
             f.write(json.dumps(cache[sql]) + "\n")
             f.flush()
