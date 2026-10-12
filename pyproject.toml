@@ -11,3 +11,11 @@ dependencies = [
 
 [tool.uv.sources]
 sorobn = { path = "vendor/sorobn", editable = true }
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+]
+
+[tool.pytest.ini_options]
+norecursedirs = ["vendor", "data", ".venv"]

@@ -13,10 +13,10 @@ index 0217b73..63c276d 100644
  	double GetNumerator(JoinRelationSet &set);
 diff --git a/src/include/duckdb/optimizer/join_order/ce_trace.hpp b/src/include/duckdb/optimizer/join_order/ce_trace.hpp
 new file mode 100644
-index 0000000..0b8aa0d
+index 0000000..71f48cd
 --- /dev/null
 +++ b/src/include/duckdb/optimizer/join_order/ce_trace.hpp
-@@ -0,0 +1,61 @@
+@@ -0,0 +1,69 @@
 +//===----------------------------------------------------------------------===//
 +//                         DuckDB
 +//
@@ -25,6 +25,10 @@ index 0000000..0b8aa0d
 +// Research patch (cardinal-duck): logs every cardinality question asked by the
 +// join order optimizer as JSON lines to the file named by $DUCKDB_CE_TRACE.
 +// Logging only, it does not change any optimizer decision.
++//
++// With $DUCKDB_CE_INJECT, estimates are read from that file instead of being
++// computed, one per line: "<invocation> <relation list> <estimate>", e.g.
++// "1 [0,2] 1234.5". Questions missing from the file keep DuckDB's estimate.
 +//===----------------------------------------------------------------------===//
 +
 +#pragma once
@@ -41,6 +45,10 @@ index 0000000..0b8aa0d
 +class CETrace {
 +public:
 +	static bool Enabled();
++	//! Tracing or injecting: optimizer invocations get ids
++	static bool Active();
++	//! Injected estimate of a set in the current invocation, if any
++	static bool Inject(const JoinRelationSet &set, double &estimate);
 +	static void WriteLine(const string &line);
 +	static string Quote(const string &text);
 +	static string Number(double value);
@@ -53,7 +61,7 @@ index 0000000..0b8aa0d
 +	static const char *&Caller();
 +
 +	static void Question(const JoinRelationSet &set, double estimate, bool cache_hit, double numerator,
-+	                     double denominator);
++	                     double denominator, bool injected = false);
 +	static void Phase(const string &name);
 +	static void Graph(QueryGraphManager &query_graph_manager, bool reorderable, idx_t depth);
 +	static void Plan(QueryGraphManager &query_graph_manager,
@@ -108,7 +116,7 @@ index 8b6469c..15aa777 100644
      ${ALL_OBJECT_FILES} $<TARGET_OBJECTS:duckdb_optimizer_join_order>
      PARENT_SCOPE)
 diff --git a/src/optimizer/join_order/cardinality_estimator.cpp b/src/optimizer/join_order/cardinality_estimator.cpp
-index f09070c..17ec1d5 100644
+index f09070c..d6c4f24 100644
 --- a/src/optimizer/join_order/cardinality_estimator.cpp
 +++ b/src/optimizer/join_order/cardinality_estimator.cpp
 @@ -3,6 +3,7 @@
@@ -132,12 +140,15 @@ index f09070c..17ec1d5 100644
  	}
  
  	// can happen if a table has cardinality 0, or a tdom is set to 0
-@@ -422,11 +427,15 @@ double CardinalityEstimator::EstimateCardinalityWithSet(JoinRelationSet &new_set
+@@ -420,13 +425,18 @@ double CardinalityEstimator::EstimateCardinalityWithSet(JoinRelationSet &new_set
+ 	auto numerator = GetNumerator(denom.numerator_relations);
+ 
  	double result = numerator / denom.denominator;
++	auto injected = CETrace::Inject(new_set, result);
  	auto new_entry = CardinalityHelper(result);
  	relation_set_2_cardinality[new_set.ToString()] = new_entry;
 +	if (CETrace::Enabled()) {
-+		CETrace::Question(new_set, result, false, numerator, denom.denominator);
++		CETrace::Question(new_set, result, false, numerator, denom.denominator, injected);
 +	}
  	return result;
  }
@@ -148,18 +159,27 @@ index f09070c..17ec1d5 100644
  	auto cardinality_as_double = EstimateCardinalityWithSet<double>(new_set);
  	auto max = NumericLimits<idx_t>::Maximum();
  	if (cardinality_as_double >= (double)max) {
-@@ -455,6 +464,10 @@ void CardinalityEstimator::InitCardinalityEstimatorProps(optional_ptr<JoinRelati
+@@ -451,10 +461,19 @@ bool SortTdoms(const RelationsSetToStats &a, const RelationsSetToStats &b) {
+ void CardinalityEstimator::InitCardinalityEstimatorProps(optional_ptr<JoinRelationSet> set, RelationStats &stats) {
+ 	// Get the join relation set
+ 	D_ASSERT(stats.stats_initialized);
++	double injected_cardinality;
++	auto injected = CETrace::Inject(*set, injected_cardinality);
++	if (injected) {
++		stats.cardinality = (idx_t)llround(injected_cardinality);
++	}
+ 	auto relation_cardinality = stats.cardinality;
  
  	auto card_helper = CardinalityHelper((double)relation_cardinality);
  	relation_set_2_cardinality[set->ToString()] = card_helper;
 +	if (CETrace::Enabled()) {
 +		CETraceCaller ce_trace_caller("leaf");
-+		CETrace::Question(*set, card_helper.cardinality_before_filters, false, 0, 0);
++		CETrace::Question(*set, card_helper.cardinality_before_filters, false, 0, 0, injected);
 +	}
  
  	UpdateTotalDomains(set, stats);
  
-@@ -494,6 +507,32 @@ void CardinalityEstimator::UpdateTotalDomains(optional_ptr<JoinRelationSet> set,
+@@ -494,6 +513,32 @@ void CardinalityEstimator::UpdateTotalDomains(optional_ptr<JoinRelationSet> set,
  	}
  }
  
@@ -194,10 +214,10 @@ index f09070c..17ec1d5 100644
  void CardinalityEstimator::AddRelationNamesToRelationStats(vector<RelationStats> &stats) {
 diff --git a/src/optimizer/join_order/ce_trace.cpp b/src/optimizer/join_order/ce_trace.cpp
 new file mode 100644
-index 0000000..40dc658
+index 0000000..86c7f1d
 --- /dev/null
 +++ b/src/optimizer/join_order/ce_trace.cpp
-@@ -0,0 +1,448 @@
+@@ -0,0 +1,493 @@
 +#include "duckdb/optimizer/join_order/ce_trace.hpp"
 +
 +#include "duckdb/catalog/catalog_entry/table_catalog_entry.hpp"
@@ -232,6 +252,31 @@ index 0000000..40dc658
 +	bool enabled = false;
 +	std::atomic<idx_t> next_invocation {1};
 +};
++
++//! Estimates read from $DUCKDB_CE_INJECT, keyed by "<invocation> <relation list>"
++struct InjectState {
++	unordered_map<string, double> estimates;
++	bool enabled = false;
++};
++
++InjectState &GetInjectState() {
++	static InjectState *state = []() {
++		auto result = new InjectState();
++		auto path = std::getenv("DUCKDB_CE_INJECT");
++		if (!path || !*path) {
++			return result;
++		}
++		std::ifstream in(path);
++		string invocation, set;
++		double estimate;
++		while (in >> invocation >> set >> estimate) {
++			result->estimates[invocation + " " + set] = estimate;
++		}
++		result->enabled = true;
++		return result;
++	}();
++	return *state;
++}
 +
 +TraceState &GetState() {
 +	static TraceState *state = []() {
@@ -400,6 +445,23 @@ index 0000000..40dc658
 +	return GetState().enabled;
 +}
 +
++bool CETrace::Active() {
++	return Enabled() || GetInjectState().enabled;
++}
++
++bool CETrace::Inject(const JoinRelationSet &set, double &estimate) {
++	auto &state = GetInjectState();
++	if (!state.enabled) {
++		return false;
++	}
++	auto entry = state.estimates.find(to_string(CurrentInvocation()) + " " + RelationList(set));
++	if (entry == state.estimates.end()) {
++		return false;
++	}
++	estimate = entry->second;
++	return true;
++}
++
 +void CETrace::WriteLine(const string &line) {
 +	auto &state = GetState();
 +	std::lock_guard<std::mutex> guard(state.lock);
@@ -473,13 +535,16 @@ index 0000000..40dc658
 +}
 +
 +void CETrace::Question(const JoinRelationSet &set, double estimate, bool cache_hit, double numerator,
-+                       double denominator) {
++                       double denominator, bool injected) {
 +	string line = "{\"ev\":\"question\",\"inv\":" + to_string(CurrentInvocation()) +
 +	              ",\"seq\":" + to_string(NextSequence()) + ",\"set\":" + RelationList(set) +
 +	              ",\"est\":" + Number(estimate) + ",\"cache_hit\":" + (cache_hit ? "true" : "false") +
 +	              ",\"caller\":" + Quote(Caller());
 +	if (!cache_hit && denominator > 0) {
 +		line += ",\"numerator\":" + Number(numerator) + ",\"denominator\":" + Number(denominator);
++	}
++	if (injected) {
++		line += ",\"injected\":true";
 +	}
 +	WriteLine(line + "}");
 +}
@@ -624,14 +689,14 @@ index 0000000..40dc658
 +}
 +
 +CETraceInvocation::CETraceInvocation() {
-+	if (!CETrace::Enabled()) {
++	if (!CETrace::Active()) {
 +		return;
 +	}
 +	Frames().push_back({GetState().next_invocation++, 0});
 +}
 +
 +CETraceInvocation::~CETraceInvocation() {
-+	if (!CETrace::Enabled()) {
++	if (!CETrace::Active()) {
 +		return;
 +	}
 +	Frames().pop_back();
@@ -683,7 +748,7 @@ index 39e60bd..334d9aa 100644
  		query_graph_manager.plans = &plan_enumerator.GetPlans();
  
 diff --git a/src/optimizer/join_order/plan_enumerator.cpp b/src/optimizer/join_order/plan_enumerator.cpp
-index 07f1039..d74eeef 100644
+index 07f1039..a6dec87 100644
 --- a/src/optimizer/join_order/plan_enumerator.cpp
 +++ b/src/optimizer/join_order/plan_enumerator.cpp
 @@ -1,4 +1,5 @@
@@ -692,15 +757,24 @@ index 07f1039..d74eeef 100644
  
  #include "duckdb/main/client_context.hpp"
  #include "duckdb/optimizer/join_order/join_node.hpp"
-@@ -464,6 +465,7 @@ void PlanEnumerator::InitLeafPlans() {
+@@ -457,13 +458,15 @@ void PlanEnumerator::InitLeafPlans() {
+ 	for (idx_t i = 0; i < relation_stats.size(); i++) {
+ 		auto stats = relation_stats.at(i);
+ 		auto &relation_set = query_graph_manager.set_manager.GetJoinRelation(i);
++		// First: it may inject the leaf cardinality into stats (cardinal-duck research patch)
++		cost_model.cardinality_estimator.InitCardinalityEstimatorProps(&relation_set, stats);
+ 		auto join_node = make_uniq<DPJoinNode>(relation_set);
+ 		join_node->cost = 0;
+ 		join_node->cardinality = stats.cardinality;
+ 		D_ASSERT(join_node->set.count == 1);
  		plans[relation_set] = std::move(join_node);
- 		cost_model.cardinality_estimator.InitCardinalityEstimatorProps(&relation_set, stats);
+-		cost_model.cardinality_estimator.InitCardinalityEstimatorProps(&relation_set, stats);
  	}
 +	cost_model.cardinality_estimator.TraceTotalDomains();
  }
  
  // the plan enumeration is a straight implementation of the paper "Dynamic Programming Strikes Back" by Guido
-@@ -473,10 +475,15 @@ void PlanEnumerator::SolveJoinOrder() {
+@@ -473,10 +476,15 @@ void PlanEnumerator::SolveJoinOrder() {
  	bool force_no_cross_product = Settings::Get<DebugForceNoCrossProductSetting>(query_graph_manager.context);
  	// first try to solve the join order exactly
  	if (query_graph_manager.relation_manager.NumRelations() >= THRESHOLD_TO_SWAP_TO_APPROXIMATE) {
@@ -719,7 +793,7 @@ index 07f1039..d74eeef 100644
  	}
  
  	// now the optimal join path should have been found
-@@ -495,6 +502,7 @@ void PlanEnumerator::SolveJoinOrder() {
+@@ -495,6 +503,7 @@ void PlanEnumerator::SolveJoinOrder() {
  			throw InvalidInputException(
  			    "Query requires a cross-product, but 'force_no_cross_product' PRAGMA is enabled");
  		}

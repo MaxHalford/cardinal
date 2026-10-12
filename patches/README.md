@@ -2,7 +2,9 @@
 
 ## `duckdb-v1.5.6-ce-trace.patch`
 
-Applies to DuckDB v1.5.6 (commit 069cc9f). It logs every cardinality question that the join-order optimizer asks, as JSON lines, to the file named by `DUCKDB_CE_TRACE`. It only logs: it does not change optimizer decisions. If the variable is not set, nothing is written.
+Applies to DuckDB v1.5.6 (commit 069cc9f). It logs every cardinality question that the join-order optimizer asks, as JSON lines, to the file named by `DUCKDB_CE_TRACE`. Logging does not change optimizer decisions. If the variable is not set, nothing is written.
+
+With `DUCKDB_CE_INJECT`, the optimizer reads estimates from that file instead of computing them, one per line: `<inv> <relation list> <estimate>`, e.g. `1 [0,2] 1234.5`. Questions missing from the file keep DuckDB's estimate. Invocation ids count from 1 per process: run one query per process. An injected base cardinality also enters DuckDB's join formula. Injected questions are logged with `"injected":true`.
 
 ```sh
 git clone https://github.com/duckdb/duckdb vendor/duckdb
@@ -10,6 +12,7 @@ cd vendor/duckdb && git checkout v1.5.6
 git apply ../../patches/duckdb-v1.5.6-ce-trace.patch
 make release
 DUCKDB_CE_TRACE=trace.jsonl build/release/duckdb my.db -c "EXPLAIN SELECT ..."
+DUCKDB_CE_INJECT=estimates.txt DUCKDB_CE_TRACE=trace.jsonl build/release/duckdb my.db -c "EXPLAIN SELECT ..."
 ```
 
 Events (one JSON object per line, `inv` = optimizer invocation id):

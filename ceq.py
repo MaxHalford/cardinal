@@ -61,11 +61,14 @@ def write_jsonl(path, rows):
             f.write(json.dumps(r) + "\n")
 
 
-def explain(binary, db, sql, trace=None):
+def explain(binary, db, sql, trace=None, inject=None):
     env = dict(os.environ)
     env.pop("DUCKDB_CE_TRACE", None)
+    env.pop("DUCKDB_CE_INJECT", None)
     if trace:
         env["DUCKDB_CE_TRACE"] = str(trace)
+    if inject:
+        env["DUCKDB_CE_INJECT"] = str(inject)
     cmd = [str(binary), "-readonly", str(db), "-c", "EXPLAIN " + sql.rstrip(";")]
     return subprocess.run(cmd, env=env, check=True, capture_output=True, text=True).stdout
 

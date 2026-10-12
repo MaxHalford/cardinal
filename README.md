@@ -7,11 +7,12 @@
 
 DuckDB estimates how many rows each intermediate join produces, and picks a join order from those estimates. This project measures how good those estimates are, and replaces them with Bayesian networks ([sorobn](https://github.com/MaxHalford/sorobn)).
 
-It has three parts:
+It has four parts:
 
-- A patch that logs every cardinality question DuckDB's join-order optimizer asks.
+- A patch that logs every cardinality question DuckDB's join-order optimizer asks, and can inject estimates instead.
 - `ceq.py`, which turns those logs into a dataset of questions with true counts.
-- `bn.py` and `score.py`, which answer the questions with Bayesian networks and compare q-errors.
+- `bn.py`, which answers the questions with per-table Bayesian networks (`tables.py`) and fanout columns for joins (`joins.py`). `score.py` compares q-errors.
+- `plans.py`, which injects estimates into DuckDB and scores the chosen plans with true cardinalities (P-error).
 
 Notes are in `notes/`.
 
@@ -40,6 +41,9 @@ uv run ceq.py trace $w $db $out
 uv run ceq.py build $out
 uv run ceq.py truth $db $out
 uv run ceq.py check $db $out
-uv run bn.py $db $out
-uv run score.py $out bn_table true_base
+uv run bn.py $db $out max_categories=500,coverage=0.9
+uv run score.py $out bn_max_categories=500,coverage=0.9 fanout_max_categories=500,coverage=0.9
+uv run plans.py $db $out duckdb bn_max_categories=500,coverage=0.9 fanout_max_categories=500,coverage=0.9
 ```
+
+Tests: `uv run python -m pytest`.
