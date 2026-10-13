@@ -1,5 +1,5 @@
 [submodule "vendor/duckdb"]
-	path = vendor/duckdb
+	path = duckdb
 	url = https://github.com/duckdb/duckdb.git
 [submodule "vendor/learnedcardinalities"]
 	path = vendor/learnedcardinalities
@@ -13,3 +13,7 @@
 [submodule "vendor/cardest-benchmark"]
 	path = vendor/cardest-benchmark
 	url = https://github.com/Nathaniel-Han/End-to-End-CardEst-Benchmark.git
+[submodule "extension-ci-tools"]
+	path = extension-ci-tools
+	url = https://github.com/duckdb/extension-ci-tools
+	branch = v1.5.6
