@@ -230,8 +230,9 @@ def fit(con, table, cols, limit, fanouts=()):
 
     # Shuffle: Compactor breaks frequency ties by first appearance, and the OTHER
     # heuristic needs frequent values that are representative, not the first
-    # rows of a table stored in sorted order.
-    sql = f'SELECT {", ".join(exprs)} FROM "{table}" t{"".join(joins)}'
+    # rows of a table stored in sorted order. Sort first: parallel joins return
+    # rows in any order, which would make the shuffle, and the model, vary.
+    sql = f'SELECT {", ".join(exprs)} FROM "{table}" t{"".join(joins)} ORDER BY t.rowid'
     df = con.execute(sql).df().sample(frac=1, random_state=0)
 
     nodes = {}
