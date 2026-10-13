@@ -1,0 +1,46 @@
+# name: test/sql/cardinal_fit.test
+# description: fit table models eagerly, then estimate with them
+# group: [sql]
+
+require cardinal
+
+# score: 10 values. city: 2,000 values, 1,000 of them frequent. note: half NULL.
+statement ok
+CREATE TABLE users AS SELECT range AS id, range % 10 AS score,
+    CASE WHEN range < 4000 THEN (range % 1000)::VARCHAR ELSE 'c' || range::VARCHAR END AS city,
+    CASE WHEN range % 2 = 0 THEN 'x' END AS note
+FROM range(5000);
+
+# Nothing learned yet: every column. id and city keep 499 values + OTHER, score 10, note 'x' + NULL.
+query III
+SELECT table_name, columns, states FROM cardinal_fit_eager('users');
+----
+users	4	1012
+
+query III
+SELECT column_name, parent IS NULL, members IS NOT NULL FROM cardinal.columns ORDER BY column_name;
+----
+city	false	true
+id	true	true
+note	false	false
+score	false	false
+
+# Each P(state | parent state) sums to 1.
+query I
+SELECT count(*) FROM (SELECT column_name, parent_state, sum(probability) AS p FROM cardinal.probabilities GROUP BY ALL) WHERE abs(p - 1) > 1e-9;
+----
+0
+
+statement ok
+SET cardinal_background = false;
+
+query I
+SELECT count(*) FROM users WHERE score >= 5 AND city LIKE '1%' AND note IS NULL;
+----
+132
+
+# Every table.
+query I
+SELECT count(*) FROM cardinal_fit_eager();
+----
+1

@@ -1,0 +1,68 @@
+#define DUCKDB_EXTENSION_MAIN
+
+#include "cardinal_extension.hpp"
+#include "fit_function.hpp"
+#include "inner_query.hpp"
+#include "join_planner.hpp"
+#include "models.hpp"
+#include "scan_hook.hpp"
+
+#include "duckdb/main/config.hpp"
+#include "duckdb/optimizer/optimizer_extension.hpp"
+
+namespace duckdb {
+
+//! Runs before DuckDB's optimizers, so the hooks are in place for filter pushdown,
+//! and the join targets for join ordering.
+static void PreOptimize(OptimizerExtensionInput &input, unique_ptr<LogicalOperator> &plan) {
+	AttachScanHooks(*plan);
+	if (InInnerQuery() || CurrentEstimator(input.context) != Estimator::FANOUT) {
+		return;
+	}
+	SetJoinTargets(PlanJoins(input.context, input.optimizer, *plan));
+}
+
+//! Runs after DuckDB's optimizers.
+static void PostOptimize(OptimizerExtensionInput &input, unique_ptr<LogicalOperator> &plan) {
+	DetachScanHooks();
+}
+
+static void LoadInternal(ExtensionLoader &loader) {
+	auto &config = DBConfig::GetConfig(loader.GetDatabaseInstance());
+	config.AddExtensionOption(ESTIMATOR_SETTING, "Estimates given to the optimizer: fanout (scans and joins) or off",
+	                          LogicalType::VARCHAR, Value("fanout"));
+	config.AddExtensionOption(BACKGROUND_SETTING, "Fit models on a worker thread: queries plan with what there is meanwhile",
+	                          LogicalType::BOOLEAN, Value::BOOLEAN(true));
+
+	OptimizerExtension extension;
+	extension.pre_optimize_function = PreOptimize;
+	extension.optimize_function = PostOptimize;
+	OptimizerExtension::Register(config, std::move(extension));
+
+	loader.RegisterFunction(FitFunctions());
+}
+
+void CardinalExtension::Load(ExtensionLoader &loader) {
+	LoadInternal(loader);
+}
+
+std::string CardinalExtension::Name() {
+	return "cardinal";
+}
+
+std::string CardinalExtension::Version() const {
+#ifdef EXT_VERSION_CARDINAL
+	return EXT_VERSION_CARDINAL;
+#else
+	return "";
+#endif
+}
+
+} // namespace duckdb
+
+extern "C" {
+
+DUCKDB_CPP_EXTENSION_ENTRY(cardinal, loader) {
+	duckdb::LoadInternal(loader);
+}
+}

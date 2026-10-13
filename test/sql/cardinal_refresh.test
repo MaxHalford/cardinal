@@ -1,0 +1,29 @@
+# name: test/sql/cardinal_refresh.test
+# description: models are fitted on first use, and refitted when a table changes
+# group: [sql]
+
+require cardinal
+
+statement ok
+CREATE TABLE t AS SELECT range % 10 AS x FROM range(1000);
+
+statement ok
+SET cardinal_background = false;
+
+statement ok
+SET cardinal_estimator = 'bn';
+
+# No stored model: fitted now. x = 3 holds 100 rows of 1,000.
+query II
+EXPLAIN SELECT * FROM t WHERE x = 3;
+----
+physical_plan	<REGEX>:.*~100 rows.*
+
+# The table doubles, all new rows with x = 3: refitted, 1,100 rows of 2,000.
+statement ok
+INSERT INTO t SELECT 3 FROM range(1000);
+
+query II
+EXPLAIN SELECT * FROM t WHERE x = 3;
+----
+physical_plan	<REGEX>:.*~1,100 rows.*
