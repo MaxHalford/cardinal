@@ -452,18 +452,16 @@ shared_ptr<Model> FitModel(Connection &con, TableCatalogEntry &table, const vect
 	return make_shared_ptr<Model>(rows, std::move(columns));
 }
 
-//! Flat values only: no lists, structs or blobs.
-static bool Supported(const LogicalType &type) {
+bool SupportedType(const LogicalType &type) {
 	return !type.IsNested() && type.id() != LogicalTypeId::BLOB;
 }
 
 vector<FitColumn> FitColumns(ClientContext &context, TableCatalogEntry &table, const vector<string> &names) {
-	vector<string> chosen = names;
-	if (chosen.empty()) {
-		for (auto &column : table.GetColumns().Logical()) {
-			if (Supported(column.Type())) {
-				chosen.push_back(column.Name());
-			}
+	vector<string> chosen;
+	for (auto &column : table.GetColumns().Logical()) {
+		auto named = names.empty() || std::find(names.begin(), names.end(), column.Name()) != names.end();
+		if (named && SupportedType(column.Type())) {
+			chosen.push_back(column.Name());
 		}
 	}
 	if (chosen.empty()) {

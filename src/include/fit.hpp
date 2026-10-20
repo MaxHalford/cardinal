@@ -30,6 +30,9 @@ struct FitFanout {
 	string fk_column;
 };
 
+//! Whether columns of the type can be modeled: flat values only, no lists, structs or blobs.
+bool SupportedType(const LogicalType &type);
+
 //! The given columns of a table, every supported one when none are given, with their
 //! distinct counts from DuckDB's statistics. Throws when there is none to model.
 vector<FitColumn> FitColumns(ClientContext &context, TableCatalogEntry &table, const vector<string> &names);

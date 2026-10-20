@@ -19,7 +19,14 @@ static void PreOptimize(OptimizerExtensionInput &input, unique_ptr<LogicalOperat
 	if (InInnerQuery() || CurrentEstimator(input.context) != Estimator::FANOUT) {
 		return;
 	}
-	SetJoinTargets(PlanJoins(input.context, input.optimizer, *plan));
+	// Never fails the query: on any error, the query is left to DuckDB.
+	try {
+		SetJoinTargets(PlanJoins(input.context, input.optimizer, *plan));
+	} catch (std::exception &) {
+		JoinTargets hands_off;
+		hands_off.hands_off = true;
+		SetJoinTargets(std::move(hands_off));
+	}
 }
 
 //! Runs after DuckDB's optimizers.
@@ -31,6 +38,8 @@ static void LoadInternal(ExtensionLoader &loader) {
 	auto &config = DBConfig::GetConfig(loader.GetDatabaseInstance());
 	config.AddExtensionOption(ESTIMATOR_SETTING, "Estimates given to the optimizer: fanout (scans and joins) or off",
 	                          LogicalType::VARCHAR, Value("fanout"));
+	config.AddExtensionOption(SAVE_SETTING, "Save fitted models in the database", LogicalType::BOOLEAN,
+	                          Value::BOOLEAN(true));
 	config.AddExtensionOption(BACKGROUND_SETTING, "Fit models on a worker thread: queries plan with what there is meanwhile",
 	                          LogicalType::BOOLEAN, Value::BOOLEAN(true));
 

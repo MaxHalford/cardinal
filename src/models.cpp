@@ -129,7 +129,8 @@ static bool Saveable(TableCatalogEntry &table) {
 
 //! Save a fitted model and the keys learned so far. A failure leaves the model in memory only.
 static void Save(ClientContext &context, Connection &con, TableCatalogEntry &table, const Model &model) {
-	if (!Saveable(table)) {
+	Value value;
+	if (!Saveable(table) || (context.TryGetCurrentSetting(SAVE_SETTING, value) && !value.GetValue<bool>())) {
 		return;
 	}
 	try {

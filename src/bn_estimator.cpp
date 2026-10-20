@@ -17,6 +17,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "bn_estimator.hpp"
+#include "fit.hpp"
 #include "keys.hpp"
 #include "models.hpp"
 
@@ -120,10 +121,17 @@ static bool DNF(const Expression &expr, vector<Term> &result) {
 
 //! Which rows of the chunks pass a predicate on one column. NULL passes only null tests.
 static vector<bool> Evaluate(ClientContext &context, const Expression &pred, const Chunks &chunks, idx_t size) {
-	// The predicate reads the only column of the chunks.
+	// The predicate reads the only column of the chunks, of the same type.
 	auto copy = pred.Copy();
+	bool same_type = true;
 	ExpressionIterator::VisitExpressionMutable<BoundReferenceExpression>(
-	    copy, [&](BoundReferenceExpression &ref, unique_ptr<Expression> &) { ref.index = 0; });
+	    copy, [&](BoundReferenceExpression &ref, unique_ptr<Expression> &) {
+		    ref.index = 0;
+		    same_type = same_type && (chunks.empty() || ref.return_type == chunks[0]->data[0].GetType());
+	    });
+	if (!same_type) {
+		throw InvalidInputException("cardinal: a filter reads its column as another type");
+	}
 	ExpressionExecutor executor(context, *copy);
 
 	vector<bool> result(size, false);
@@ -144,80 +152,77 @@ static vector<bool> Matches(ClientContext &context, const Expression &pred, cons
 	return Evaluate(context, pred, column.state_chunks, column.values.size());
 }
 
-//! Share of OTHER matched by distinct values: values outside the frequent ones / members.
-static double ValueShare(const vector<Value> &values, const ModelColumn &column, const LogicalType &type) {
-	idx_t outside = 0;
-	vector<Value> seen;
-	for (auto value : values) {
-		if (value.IsNull() || !value.DefaultTryCastAs(type) || std::find(seen.begin(), seen.end(), value) != seen.end()) {
-			continue;
-		}
-		seen.push_back(value);
-		bool frequent = false;
-		for (idx_t s = 0; s < column.values.size() && !frequent; s++) {
-			frequent = column.kinds[s] == StateKind::VALUE && column.values[s] == value;
-		}
-		outside += !frequent;
-	}
-	auto members = MaxValue<idx_t>(column.members.GetIndex(), 1);
-	return double(MinValue(outside, members)) / double(members);
-}
-
 static bool IsColumnConstant(const Expression &column, const Expression &constant) {
 	return column.GetExpressionClass() == ExpressionClass::BOUND_REF &&
 	       constant.GetExpressionClass() == ExpressionClass::BOUND_CONSTANT;
 }
 
-//! Share of OTHER for =, IN, != and NOT of = or IN. Invalid for other predicates.
-static bool PointShare(const Expression &pred, const ModelColumn &column, const LogicalType &type, double &share) {
-	auto expression_type = pred.GetExpressionType();
+//! For =, IN, != and NOT of = or IN: their distinct non-null constants, and whether negated.
+static bool PointValues(const Expression &pred, idx_t &values, bool &negated) {
+	set<string> distinct;
+	auto add = [&](const Expression &constant) {
+		auto &value = constant.Cast<BoundConstantExpression>().value;
+		if (!value.IsNull()) {
+			distinct.insert(value.ToString());
+		}
+	};
+	auto type = pred.GetExpressionType();
 	if (pred.GetExpressionClass() == ExpressionClass::BOUND_COMPARISON) {
-		auto &comparison = pred.Cast<BoundComparisonExpression>();
-		auto &constant = IsColumnConstant(*comparison.left, *comparison.right) ? *comparison.right : *comparison.left;
-		if (!IsColumnConstant(*comparison.left, *comparison.right) &&
-		    !IsColumnConstant(*comparison.right, *comparison.left)) {
+		if (type != ExpressionType::COMPARE_EQUAL && type != ExpressionType::COMPARE_NOTEQUAL) {
 			return false;
 		}
-		auto eq = ValueShare({constant.Cast<BoundConstantExpression>().value}, column, type);
-		if (expression_type == ExpressionType::COMPARE_EQUAL) {
-			share = eq;
-			return true;
+		auto &comparison = pred.Cast<BoundComparisonExpression>();
+		if (IsColumnConstant(*comparison.left, *comparison.right)) {
+			add(*comparison.right);
+		} else if (IsColumnConstant(*comparison.right, *comparison.left)) {
+			add(*comparison.left);
+		} else {
+			return false;
 		}
-		if (expression_type == ExpressionType::COMPARE_NOTEQUAL) {
-			share = 1 - eq;
-			return true;
-		}
-		return false;
+		negated = type == ExpressionType::COMPARE_NOTEQUAL;
+		values = distinct.size();
+		return true;
 	}
-
 	if (pred.GetExpressionClass() != ExpressionClass::BOUND_OPERATOR) {
 		return false;
 	}
 	auto &op = pred.Cast<BoundOperatorExpression>();
-	if (expression_type == ExpressionType::OPERATOR_NOT) {
-		auto child_type = op.children[0]->GetExpressionType();
-		if (child_type != ExpressionType::COMPARE_EQUAL && child_type != ExpressionType::COMPARE_IN) {
+	if (type == ExpressionType::OPERATOR_NOT) {
+		auto child = op.children[0]->GetExpressionType();
+		if ((child != ExpressionType::COMPARE_EQUAL && child != ExpressionType::COMPARE_IN) ||
+		    !PointValues(*op.children[0], values, negated)) {
 			return false;
 		}
-		if (!PointShare(*op.children[0], column, type, share)) {
-			return false;
-		}
-		share = 1 - share;
+		negated = !negated;
 		return true;
 	}
-	if (expression_type != ExpressionType::COMPARE_IN && expression_type != ExpressionType::COMPARE_NOT_IN) {
+	if (type != ExpressionType::COMPARE_IN && type != ExpressionType::COMPARE_NOT_IN) {
 		return false;
 	}
-
-	vector<Value> values;
 	for (idx_t i = 1; i < op.children.size(); i++) {
 		if (!IsColumnConstant(*op.children[0], *op.children[i])) {
 			return false;
 		}
-		values.push_back(op.children[i]->Cast<BoundConstantExpression>().value);
+		add(*op.children[i]);
 	}
-	auto in = ValueShare(values, column, type);
-	share = expression_type == ExpressionType::COMPARE_IN ? in : 1 - in;
+	negated = type == ExpressionType::COMPARE_NOT_IN;
+	values = distinct.size();
+	return true;
+}
+
+//! Share of OTHER for =, IN, != and NOT of = or IN: each infrequent value equally frequent.
+//! Its values that are infrequent: its values, minus the frequent states it keeps.
+static bool PointShare(const Expression &pred, const ModelColumn &column, idx_t frequent_matches, double &share) {
+	idx_t values;
+	bool negated;
+	if (!PointValues(pred, values, negated)) {
+		return false;
+	}
+	auto positive = negated ? column.FrequentCount() - frequent_matches : frequent_matches;
+	auto outside = values > positive ? values - positive : 0;
+	auto members = MaxValue<idx_t>(column.members.GetIndex(), 1);
+	auto in = double(MinValue(outside, members)) / double(members);
+	share = negated ? 1 - in : in;
 	return true;
 }
 
@@ -247,7 +252,7 @@ static vector<double> ColumnWeights(ClientContext &context, const vector<const E
 
 	// One predicate of the =, IN, != kind: point share. Otherwise, bucket share.
 	double share;
-	if (preds.size() != 1 || !PointShare(*preds[0], column, type, share)) {
+	if (preds.size() != 1 || !PointShare(*preds[0], column, frequent_matches, share)) {
 		share = double(frequent_matches + 1) / double(column.FrequentCount() + 2);
 	}
 	for (idx_t s = 0; s < states; s++) {
@@ -395,8 +400,11 @@ bool Expect(ClientContext &context, const Model &model, const PreparedFilters &f
 
 vector<string> FilteredColumns(LogicalGet &get, const vector<unique_ptr<Expression>> &filters) {
 	set<string> names;
+	auto supported = [&](idx_t column) {
+		return column < get.names.size() && SupportedType(get.returned_types[column]);
+	};
 	for (auto &entry : get.table_filters.filters) {
-		if (Counts(*entry.second) && entry.first < get.names.size()) {
+		if (Counts(*entry.second) && supported(entry.first)) {
 			names.insert(get.names[entry.first]);
 		}
 	}
@@ -407,7 +415,7 @@ vector<string> FilteredColumns(LogicalGet &get, const vector<unique_ptr<Expressi
 				return;
 			}
 			auto primary = ids[ref.binding.column_index].GetPrimaryIndex();
-			if (primary < get.names.size()) {
+			if (supported(primary)) {
 				names.insert(get.names[primary]);
 			}
 		});

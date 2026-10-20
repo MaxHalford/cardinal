@@ -208,16 +208,26 @@ void SaveKeys(Connection &con, const string &catalog, ClientContext &context) {
 			throw InvalidInputException("cardinal: %s", result->GetError());
 		}
 	};
+	// In place, in one transaction: the table is replaced only in content.
+	lock_guard<mutex> guard(StoreLock(*con.context));
 	auto prefix = name + "." + MODEL_SCHEMA;
 	check(con.Query("CREATE SCHEMA IF NOT EXISTS " + prefix));
-	check(con.Query("CREATE OR REPLACE TABLE " + prefix + ".keys (fk_schema VARCHAR, fk_table VARCHAR, "
+	check(con.Query("CREATE TABLE IF NOT EXISTS " + prefix + ".keys (fk_schema VARCHAR, fk_table VARCHAR, "
 	                "fk_column VARCHAR, pk_schema VARCHAR, pk_table VARCHAR, pk_column VARCHAR)"));
-	Appender appender(con, catalog, MODEL_SCHEMA, "keys");
-	for (auto &key : keys) {
-		appender.AppendRow(Value(key.first.schema), Value(key.first.table), Value(key.first.column),
-		                   Value(key.second.schema), Value(key.second.table), Value(key.second.column));
+	con.BeginTransaction();
+	try {
+		check(con.Query("DELETE FROM " + prefix + ".keys"));
+		Appender appender(con, catalog, MODEL_SCHEMA, "keys");
+		for (auto &key : keys) {
+			appender.AppendRow(Value(key.first.schema), Value(key.first.table), Value(key.first.column),
+			                   Value(key.second.schema), Value(key.second.table), Value(key.second.column));
+		}
+		appender.Close();
+		con.Commit();
+	} catch (std::exception &) {
+		con.Rollback();
+		throw;
 	}
-	appender.Close();
 }
 
 optional_ptr<TableCatalogEntry> KeyTable(ClientContext &context, const KeyColumn &column) {

@@ -14,6 +14,7 @@
 
 #include "duckdb/catalog/catalog.hpp"
 #include "duckdb/main/appender.hpp"
+#include "duckdb/storage/object_cache.hpp"
 
 namespace duckdb {
 
@@ -132,52 +133,76 @@ static void Check(unique_ptr<MaterializedQueryResult> result) {
 	}
 }
 
+//! The store lock, in DuckDB's object cache: one per database.
+struct StoreLockEntry : public ObjectCacheEntry {
+	static string ObjectType() {
+		return "cardinal_store_lock";
+	}
+	string GetObjectType() override {
+		return ObjectType();
+	}
+	optional_idx GetEstimatedCacheMemory() const override {
+		return optional_idx();
+	}
+	mutex lock;
+};
+
+mutex &StoreLock(ClientContext &context) {
+	return ObjectCache::GetObjectCache(context).GetOrCreate<StoreLockEntry>("cardinal:store_lock")->lock;
+}
+
 void SaveModel(Connection &con, TableCatalogEntry &table, const Model &model) {
+	lock_guard<mutex> guard(StoreLock(*con.context));
 	auto catalog_name = table.ParentCatalog().GetName();
 	auto catalog = KeywordHelper::WriteOptionallyQuoted(catalog_name);
 	auto name = table.name;
 
+	// One transaction: a failure leaves the stored model as it was.
 	con.BeginTransaction();
-	auto prefix = catalog + "." + MODEL_SCHEMA;
-	auto schema = con.Query(StringUtil::Format(SCHEMA_SQL, prefix, prefix, prefix, prefix, prefix));
-	if (schema->HasError()) {
+	try {
+		auto prefix = catalog + "." + MODEL_SCHEMA;
+		auto schema = con.Query(StringUtil::Format(SCHEMA_SQL, prefix, prefix, prefix, prefix, prefix));
+		if (schema->HasError()) {
+			throw InvalidInputException("cardinal: %s", schema->GetError());
+		}
+		for (auto from : {"tables", "columns", "states", "probabilities"}) {
+			Check(con.Query("DELETE FROM " + prefix + "." + from + " WHERE table_name = " + Quote(name)));
+		}
+
+		Appender tables(con, catalog_name, MODEL_SCHEMA, "tables");
+		tables.AppendRow(Value(name), Value::BIGINT(int64_t(model.Rows())));
+		tables.Close();
+
+		Appender columns(con, catalog_name, MODEL_SCHEMA, "columns");
+		Appender states(con, catalog_name, MODEL_SCHEMA, "states");
+		Appender probabilities(con, catalog_name, MODEL_SCHEMA, "probabilities");
+		auto &cols = model.Columns();
+		for (auto &col : cols) {
+			auto parent = col.parent.IsValid() ? Value(cols[col.parent.GetIndex()].name) : Value(LogicalType::VARCHAR);
+			auto members = col.members.IsValid() ? Value::BIGINT(int64_t(col.members.GetIndex())) : Value(LogicalType::BIGINT);
+			columns.AppendRow(Value(name), Value(col.name), parent, members);
+
+			for (idx_t s = 0; s < col.values.size(); s++) {
+				auto value = col.kinds[s] == StateKind::VALUE ? col.values[s].DefaultCastAs(LogicalType::VARCHAR)
+				                                              : Value(LogicalType::VARCHAR);
+				states.AppendRow(Value(name), Value(col.name), Value::INTEGER(int32_t(s)), value,
+				                 Value(KindName(col.kinds[s])));
+			}
+			for (auto &entry : col.probabilities) {
+				auto parent_state =
+				    col.parent.IsValid() ? Value::INTEGER(int32_t(entry.parent_state)) : Value(LogicalType::INTEGER);
+				probabilities.AppendRow(Value(name), Value(col.name), Value::INTEGER(int32_t(entry.state)), parent_state,
+				                        Value::DOUBLE(entry.p));
+			}
+		}
+		columns.Close();
+		states.Close();
+		probabilities.Close();
+		con.Commit();
+	} catch (std::exception &) {
 		con.Rollback();
-		throw InvalidInputException("cardinal: %s", schema->GetError());
+		throw;
 	}
-	for (auto from : {"tables", "columns", "states", "probabilities"}) {
-		Check(con.Query("DELETE FROM " + prefix + "." + from + " WHERE table_name = " + Quote(name)));
-	}
-
-	Appender tables(con, catalog_name, MODEL_SCHEMA, "tables");
-	tables.AppendRow(Value(name), Value::BIGINT(int64_t(model.Rows())));
-	tables.Close();
-
-	Appender columns(con, catalog_name, MODEL_SCHEMA, "columns");
-	Appender states(con, catalog_name, MODEL_SCHEMA, "states");
-	Appender probabilities(con, catalog_name, MODEL_SCHEMA, "probabilities");
-	auto &cols = model.Columns();
-	for (auto &col : cols) {
-		auto parent = col.parent.IsValid() ? Value(cols[col.parent.GetIndex()].name) : Value(LogicalType::VARCHAR);
-		auto members = col.members.IsValid() ? Value::BIGINT(int64_t(col.members.GetIndex())) : Value(LogicalType::BIGINT);
-		columns.AppendRow(Value(name), Value(col.name), parent, members);
-
-		for (idx_t s = 0; s < col.values.size(); s++) {
-			auto value = col.kinds[s] == StateKind::VALUE ? col.values[s].DefaultCastAs(LogicalType::VARCHAR)
-			                                              : Value(LogicalType::VARCHAR);
-			states.AppendRow(Value(name), Value(col.name), Value::INTEGER(int32_t(s)), value,
-			                 Value(KindName(col.kinds[s])));
-		}
-		for (auto &entry : col.probabilities) {
-			auto parent_state =
-			    col.parent.IsValid() ? Value::INTEGER(int32_t(entry.parent_state)) : Value(LogicalType::INTEGER);
-			probabilities.AppendRow(Value(name), Value(col.name), Value::INTEGER(int32_t(entry.state)), parent_state,
-			                        Value::DOUBLE(entry.p));
-		}
-	}
-	columns.Close();
-	states.Close();
-	probabilities.Close();
-	con.Commit();
 }
 
 } // namespace duckdb

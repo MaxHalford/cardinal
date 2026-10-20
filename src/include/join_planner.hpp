@@ -26,6 +26,8 @@ struct JoinTargets {
 	unordered_map<idx_t, double> rows;
 	//! Distinct values, by scan table_index and table column.
 	map<pair<idx_t, idx_t>, idx_t> distinct;
+	//! Leave the query to DuckDB, scans included: its plan was not believed worse.
+	bool hands_off = false;
 };
 
 //! Targets for the plan's joins. Empty when the plan has no join to estimate.

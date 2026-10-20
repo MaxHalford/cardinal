@@ -158,6 +158,44 @@ bool JoinEstimator::Estimate(uint64_t set, double &card) {
 		dimensions.insert(c.d.GetIndex());
 	}
 
+	// Foreign keys not NULL: on each relation's model, with its filters and alone.
+	keyed_filters.clear();
+	key_filters.clear();
+	for (auto &entry : fk_of) {
+		auto r = entry.first;
+		auto &relation = relations[r];
+		if (!relation.model) {
+			continue;
+		}
+		auto &model = *relation.model;
+		auto &with = keyed_filters[r];
+		auto &alone = key_filters[r];
+		auto &base = FiltersOf(r);
+		with.types = base.types.empty() ? vector<LogicalType>(model.Columns().size(), LogicalType::DOUBLE) : base.types;
+		alone.types = with.types;
+		for (auto &expr : base.filters) {
+			with.filters.push_back(expr->Copy());
+		}
+		with.key = base.key;
+		for (auto c : entry.second) {
+			auto column = model.Find(c->fks.at(r));
+			if (!column.IsValid()) {
+				continue;
+			}
+			auto &type = model.Columns()[column.GetIndex()].type;
+			for (auto target : {&with, &alone}) {
+				auto not_null = make_uniq<BoundOperatorExpression>(ExpressionType::OPERATOR_IS_NOT_NULL, LogicalType::BOOLEAN);
+				not_null->children.push_back(make_uniq<BoundReferenceExpression>(type, column.GetIndex()));
+				target->filters.push_back(std::move(not_null));
+				target->key += " AND #" + to_string(column.GetIndex()) + " IS NOT NULL";
+			}
+		}
+		if (alone.filters.empty()) {
+			keyed_filters.erase(r);
+			key_filters.erase(r);
+		}
+	}
+
 	// The root is never a folded dimension: its foreign key accounts for it.
 	idx_t root = 0;
 	while (!Has(set, root) || dimensions.count(root)) {
@@ -220,7 +258,19 @@ double JoinEstimator::Weight(idx_t r, const Class *parent) {
 			scalar *= Average(*c, r);
 		}
 	}
-	return ExpectOn(relations[r].model.get(), &FiltersOf(r), powers) * scalar;
+	return RelationExpect(r, powers) * scalar;
+}
+
+double JoinEstimator::RelationExpect(idx_t r, const map<string, idx_t> &powers) {
+	auto keyed = keyed_filters.find(r);
+	if (keyed == keyed_filters.end()) {
+		return ExpectOn(relations[r].model.get(), &FiltersOf(r), powers);
+	}
+	auto keys = ExpectOn(relations[r].model.get(), &key_filters[r], {});
+	if (keys <= 0) {
+		return 0;
+	}
+	return ExpectOn(relations[r].model.get(), &keyed->second, powers) / keys;
 }
 
 const PreparedFilters &JoinEstimator::FiltersOf(idx_t r) {
@@ -262,15 +312,16 @@ double JoinEstimator::Average(const Class &c, idx_t r) {
 	Members(c, r, powers, scalar);
 	powers[FanoutName(relations[r].table.get().name, c.fks.at(r))]++;
 
-	const PreparedFilters *filters = nullptr;
+	double e;
 	if (c.d.IsValid()) {
 		auto d = c.d.GetIndex();
-		filters = &FiltersOf(d);
 		for (auto other : fk_of[d]) {
 			scalar *= Average(*other, d);
 		}
+		e = RelationExpect(d, powers);
+	} else {
+		e = ExpectOn(DomainModel(c), nullptr, powers);
 	}
-	auto e = ExpectOn(DomainModel(c), filters, powers);
 	return double(DomainRows(c)) / double(MaxValue<idx_t>(relations[r].rows, 1)) * e * scalar;
 }
 

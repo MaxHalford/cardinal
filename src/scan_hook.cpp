@@ -152,11 +152,11 @@ static optional_idx Estimate(Estimator estimator, ClientContext &context, Logica
 	}
 }
 
-//! pushdown_complex_filter: the filters stay as they are, only the row count changes.
-static void ScanHook(ClientContext &context, LogicalGet &get, FunctionData *bind_data,
-                     vector<unique_ptr<Expression>> &filters) {
+//! The scan hook's work. May throw.
+static void EstimateScan(ClientContext &context, LogicalGet &get, FunctionData *bind_data,
+                         vector<unique_ptr<Expression>> &filters) {
 	// Join order set the estimate: later pushdowns are not ours to change.
-	if (get.has_estimated_cardinality || frames.empty()) {
+	if (get.has_estimated_cardinality || frames.empty() || frames.back().targets.hands_off) {
 		return;
 	}
 	auto estimator = CurrentEstimator(context);
@@ -176,6 +176,19 @@ static void ScanHook(ClientContext &context, LogicalGet &get, FunctionData *bind
 	// e.g. 1,000 estimated rows behind one range filter: 5,000, which DuckDB x 0.2 = 1,000.
 	auto base = std::round(double(rows.GetIndex()) / factor);
 	frames.back().rows[bind_data] = MaxValue<idx_t>(idx_t(base), 1);
+}
+
+//! pushdown_complex_filter: the filters stay as they are, only the row count changes.
+//! Never fails the query: on any error, the scan keeps DuckDB's estimate.
+static void ScanHook(ClientContext &context, LogicalGet &get, FunctionData *bind_data,
+                     vector<unique_ptr<Expression>> &filters) {
+	try {
+		EstimateScan(context, get, bind_data, filters);
+	} catch (std::exception &) {
+		if (!frames.empty()) {
+			frames.back().rows.erase(bind_data);
+		}
+	}
 }
 
 //! cardinality: the remembered base row count, else the scan's own.
@@ -202,6 +215,9 @@ static unique_ptr<BaseStatistics> ScanStatistics(ClientContext &context, TableFu
 			continue;
 		}
 		auto stats = original->second(context, input);
+		if (!stats || !input.column_index.HasPrimaryIndex()) {
+			return stats;
+		}
 		auto key = make_pair(frame->table_index[bind_data], input.column_index.GetPrimaryIndex());
 		auto target = frame->targets.distinct.find(key);
 		if (stats && target != frame->targets.distinct.end()) {
@@ -243,6 +259,43 @@ void AttachScanHooks(LogicalOperator &op) {
 		return;
 	}
 	AttachHooks(op);
+}
+
+//! Hooks on the scans of an analyzed copy: each scan's base row count is its target over
+//! DuckDB's filter factor, given the filters left above it.
+static void AttachTargetHooks(ClientContext &context, LogicalOperator &op,
+                              const vector<unique_ptr<Expression>> *above) {
+	if (op.type == LogicalOperatorType::LOGICAL_FILTER && op.children[0]->type == LogicalOperatorType::LOGICAL_GET) {
+		AttachTargetHooks(context, *op.children[0], &op.expressions);
+		return;
+	}
+	for (auto &child : op.children) {
+		AttachTargetHooks(context, *child, nullptr);
+	}
+	if (op.type != LogicalOperatorType::LOGICAL_GET) {
+		return;
+	}
+	auto &get = op.Cast<LogicalGet>();
+	if (!get.GetTable() || !get.bind_data) {
+		return;
+	}
+	AttachHooks(op);
+	auto &frame = frames.back();
+	auto target = frame.targets.rows.find(get.table_index);
+	if (target == frame.targets.rows.end()) {
+		return;
+	}
+	vector<unique_ptr<Expression>> none;
+	auto factor = FilterFactor(context, get, above ? *above : none);
+	if (factor > 0) {
+		frame.rows[get.bind_data.get()] = MaxValue<idx_t>(idx_t(std::round(target->second / factor)), 1);
+	}
+}
+
+void AttachTargets(ClientContext &context, LogicalOperator &plan, const JoinTargets &targets) {
+	frames.emplace_back();
+	frames.back().targets = targets;
+	AttachTargetHooks(context, plan, nullptr);
 }
 
 void SetJoinTargets(JoinTargets targets) {

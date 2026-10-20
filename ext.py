@@ -10,8 +10,10 @@ models and keys in <db>. Later sessions start from them, as a user's would.
 plans: P-error of the plans DuckDB picks with the extension in each mode
 (off, bn, fanout), costed with true cardinalities like plans.py. Each query
 is planned twice in one traced process: the second plan is scored. The
-extension's own queries also show in the trace: the dataset's invocations are
-found in order among the second plan's. Writes <out>/plans/cardinal_<mode>.jsonl.
+extension's own work also shows in the trace: its queries, and the join
+orders it compares on copies of the plan before DuckDB plans. So the dataset's
+invocations are matched from the end, where DuckDB's real ones are.
+Writes <out>/plans/cardinal_<mode>.jsonl.
 
 runtime.py times the same modes: cardinal_<mode>.
 """
@@ -68,15 +70,15 @@ def second_plans(events, expected):
     ids = sorted(tables)
     second = ids[len(ids) // 2:]
 
-    found, i = {}, 0
-    for inv, names in expected:
-        while i < len(second) and tables[second[i]] != names:
-            i += 1
-        if i == len(second):
+    found, i = {}, len(second) - 1
+    for inv, names in reversed(expected):
+        while i >= 0 and tables[second[i]] != names:
+            i -= 1
+        if i < 0:
             return None
         if second[i] in trees:
             found[inv] = trees[second[i]]
-        i += 1
+        i -= 1
     return found
 
 

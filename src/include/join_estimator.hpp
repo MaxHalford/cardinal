@@ -19,6 +19,11 @@
 //    avg(c, R) = |D| / |R| · E_D[1(f_D) · F_R · Π F_M] · Π weight(M) · ...
 //    card      = |root| · weight(root)
 //
+// Only rows whose foreign key is not NULL join, and filters can pick them out:
+// e.g. votes with a BountyAmount almost all have a UserId, most votes do not.
+// So a foreign-key relation's filters are taken given its keys are not NULL:
+// E[1(f) ...] becomes E[1(f ∧ fk NOT NULL) ...] / P(fk NOT NULL).
+//
 // A filtered dimension D, small enough to read, is folded into its foreign key
 // R when it joins nothing else in the set: the keys passing D's filters become
 // a filter on R, R.fk IN (keys), which R's model evaluates jointly with R's
@@ -90,6 +95,8 @@ private:
 
 	//! A relation's filters with the keys of the dimensions folded into it, if any.
 	const PreparedFilters &FiltersOf(idx_t r);
+	//! E_r[1(f_r) · Π F^k], given r's foreign keys in the set are not NULL.
+	double RelationExpect(idx_t r, const map<string, idx_t> &powers);
 
 	//! The set being estimated.
 	vector<Class> classes;
@@ -98,6 +105,10 @@ private:
 	//! Folded classes, and the filters of their foreign-key relations.
 	set<idx_t> folded;
 	map<idx_t, PreparedFilters> folded_filters;
+	//! Relations with foreign keys in the set: their filters with fk IS NOT NULL, and the
+	//! IS NOT NULL predicates alone.
+	map<idx_t, PreparedFilters> keyed_filters;
+	map<idx_t, PreparedFilters> key_filters;
 };
 
 } // namespace duckdb
