@@ -1,6 +1,6 @@
 #include "keys.hpp"
 #include "inner_query.hpp"
-#include "model_store.hpp"
+#include "store.hpp"
 
 #include "duckdb/catalog/catalog.hpp"
 #include "duckdb/catalog/entry_lookup_info.hpp"
@@ -54,7 +54,7 @@ struct KeyRegistry : public ObjectCacheEntry {
 	set<string> loaded;
 };
 
-//! Stored foreign keys: catalog.__cardinal.keys.
+//! Stored foreign keys: the store's keys table, by database.
 static constexpr const char *KEYS_COLUMNS = "fk_schema, fk_table, fk_column, pk_schema, pk_table, pk_column";
 
 //! The registry, with the stored keys of the catalog read once.
@@ -67,22 +67,34 @@ static KeyRegistry &Registry(ClientContext &context, const string &catalog) {
 		}
 		registry.loaded.insert(catalog);
 	}
-	auto stored = InnerQuery(context, string("SELECT ") + KEYS_COLUMNS + " FROM " +
-	                                      KeywordHelper::WriteOptionallyQuoted(catalog) + "." + MODEL_SCHEMA + ".keys");
-	if (!stored) {
+	string database;
+	try {
+		database = DatabaseKey(Catalog::GetCatalog(context, catalog));
+	} catch (std::exception &) {
+	}
+	if (database.empty()) {
 		return registry;
 	}
+	vector<pair<KeyColumn, KeyColumn>> stored;
+	WithStore(context, [&](Connection &con) {
+		auto result = StoreQuery(con, string("SELECT ") + KEYS_COLUMNS + " FROM keys WHERE database = $1",
+		                         {Value(database)});
+		auto &rows = *result;
+		for (idx_t i = 0; i < rows.RowCount(); i++) {
+			KeyColumn fk, pk;
+			fk.catalog = pk.catalog = catalog;
+			fk.schema = rows.GetValue(0, i).ToString();
+			fk.table = rows.GetValue(1, i).ToString();
+			fk.column = rows.GetValue(2, i).ToString();
+			pk.schema = rows.GetValue(3, i).ToString();
+			pk.table = rows.GetValue(4, i).ToString();
+			pk.column = rows.GetValue(5, i).ToString();
+			stored.emplace_back(fk, pk);
+		}
+	});
 	lock_guard<mutex> guard(registry.lock);
-	for (idx_t i = 0; i < stored->RowCount(); i++) {
-		KeyColumn fk, pk;
-		fk.catalog = pk.catalog = catalog;
-		fk.schema = stored->GetValue(0, i).ToString();
-		fk.table = stored->GetValue(1, i).ToString();
-		fk.column = stored->GetValue(2, i).ToString();
-		pk.schema = stored->GetValue(3, i).ToString();
-		pk.table = stored->GetValue(4, i).ToString();
-		pk.column = stored->GetValue(5, i).ToString();
-		registry.references.emplace(fk, pk);
+	for (auto &key : stored) {
+		registry.references.emplace(key.first, key.second);
 	}
 	return registry;
 }
@@ -190,44 +202,40 @@ vector<string> FilterColumns(ClientContext &context, TableCatalogEntry &table) {
 	return vector<string>(known.begin(), known.end());
 }
 
-void SaveKeys(Connection &con, const string &catalog, ClientContext &context) {
-	auto &registry = Registry(context, catalog);
+bool SaveKeys(ClientContext &context, Catalog &catalog) {
+	auto database = DatabaseKey(catalog);
+	if (database.empty()) {
+		return false;
+	}
+	auto &registry = Registry(context, catalog.GetName());
 	vector<pair<KeyColumn, KeyColumn>> keys;
 	{
 		lock_guard<mutex> guard(registry.lock);
 		for (auto &entry : registry.references) {
-			if (entry.first.catalog == catalog) {
+			if (entry.first.catalog == catalog.GetName()) {
 				keys.emplace_back(entry.first, entry.second);
 			}
 		}
 	}
 
-	auto name = KeywordHelper::WriteOptionallyQuoted(catalog);
-	auto check = [](unique_ptr<MaterializedQueryResult> result) {
-		if (result->HasError()) {
-			throw InvalidInputException("cardinal: %s", result->GetError());
+	// In one transaction: the keys of the database are replaced at once.
+	return WithStore(context, [&](Connection &con) {
+		con.BeginTransaction();
+		try {
+			StoreQuery(con, "DELETE FROM keys WHERE database = $1", {Value(database)});
+			Appender appender(con, "keys");
+			for (auto &key : keys) {
+				appender.AppendRow(Value(database), Value(key.first.schema), Value(key.first.table),
+				                   Value(key.first.column), Value(key.second.schema), Value(key.second.table),
+				                   Value(key.second.column));
+			}
+			appender.Close();
+			con.Commit();
+		} catch (std::exception &) {
+			con.Rollback();
+			throw;
 		}
-	};
-	// In place, in one transaction: the table is replaced only in content.
-	lock_guard<mutex> guard(StoreLock(*con.context));
-	auto prefix = name + "." + MODEL_SCHEMA;
-	check(con.Query("CREATE SCHEMA IF NOT EXISTS " + prefix));
-	check(con.Query("CREATE TABLE IF NOT EXISTS " + prefix + ".keys (fk_schema VARCHAR, fk_table VARCHAR, "
-	                "fk_column VARCHAR, pk_schema VARCHAR, pk_table VARCHAR, pk_column VARCHAR)"));
-	con.BeginTransaction();
-	try {
-		check(con.Query("DELETE FROM " + prefix + ".keys"));
-		Appender appender(con, catalog, MODEL_SCHEMA, "keys");
-		for (auto &key : keys) {
-			appender.AppendRow(Value(key.first.schema), Value(key.first.table), Value(key.first.column),
-			                   Value(key.second.schema), Value(key.second.table), Value(key.second.column));
-		}
-		appender.Close();
-		con.Commit();
-	} catch (std::exception &) {
-		con.Rollback();
-		throw;
-	}
+	});
 }
 
 optional_ptr<TableCatalogEntry> KeyTable(ClientContext &context, const KeyColumn &column) {

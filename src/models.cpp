@@ -13,12 +13,14 @@
 // Fresh: the table's row count is within MAX_DRIFT of the model's, and the
 // model covers the columns and fanouts known now.
 //
-// With cardinal_background (the default), fits run on a worker thread: the
-// query plans with what there is, the old model or DuckDB's own estimates, and
-// later queries get the new model. Without it, the query waits for the fit.
+// By default the query that needs a model waits for its fit. With
+// cardinal_background, fits run on a worker thread instead: the query plans
+// with what there is, the old model or DuckDB's own estimates, and later
+// queries get the new model. Off by default: the worker's transactions block
+// CHECKPOINT, and keep a closed database open until the fit ends.
 //
-// Models fitted here are saved in the database, with the keys learned so far,
-// unless it cannot take them: read-only, in memory, or not a DuckDB database.
+// Models fitted here are saved in the store (store.hpp), with the keys learned
+// so far: never in the user's database.
 //===----------------------------------------------------------------------===//
 
 #include "models.hpp"
@@ -27,7 +29,6 @@
 #include "keys.hpp"
 #include "model_store.hpp"
 
-#include "duckdb/main/attached_database.hpp"
 #include "duckdb/main/connection.hpp"
 #include "duckdb/main/database.hpp"
 #include "duckdb/storage/data_table.hpp"
@@ -114,30 +115,18 @@ static bool Fresh(const Model &model, optional_idx rows) {
 
 static bool Background(ClientContext &context) {
 	Value value;
-	return !context.TryGetCurrentSetting(BACKGROUND_SETTING, value) || value.GetValue<bool>();
+	return context.TryGetCurrentSetting(BACKGROUND_SETTING, value) && value.GetValue<bool>();
 }
 
-//! Whether the table's database can store models.
-static bool Saveable(TableCatalogEntry &table) {
-	auto &catalog = table.ParentCatalog();
-	if (!catalog.IsDuckCatalog() || catalog.InMemory()) {
-		return false;
-	}
-	auto &attached = catalog.GetAttached();
-	return !attached.IsReadOnly() && !attached.IsTemporary() && !attached.IsSystem();
-}
-
-//! Save a fitted model and the keys learned so far. A failure leaves the model in memory only.
-static void Save(ClientContext &context, Connection &con, TableCatalogEntry &table, const Model &model) {
+//! Save a fitted model and the keys learned so far, unless saving is off. A failure leaves
+//! the model in memory only.
+static void Save(ClientContext &context, TableCatalogEntry &table, const Model &model) {
 	Value value;
-	if (!Saveable(table) || (context.TryGetCurrentSetting(SAVE_SETTING, value) && !value.GetValue<bool>())) {
+	if (context.TryGetCurrentSetting(SAVE_SETTING, value) && !value.GetValue<bool>()) {
 		return;
 	}
-	try {
-		SaveModel(con, table, model);
-		SaveKeys(con, table.ParentCatalog().GetName(), context);
-	} catch (std::exception &) {
-	}
+	SaveModel(context, table, model);
+	SaveKeys(context, table.ParentCatalog());
 }
 
 //! The fit of a table: its columns and fanouts as known now. Throws when it fails.
@@ -246,7 +235,7 @@ struct FitWorker : public ObjectCacheEntry {
 			model = nullptr;
 		}
 		if (model) {
-			Save(context, con, *table, *model);
+			Save(context, *table, *model);
 		}
 		if (table) {
 			context.RunFunctionInTransaction([&]() { Install(context, *table, model); });
@@ -258,8 +247,8 @@ struct FitWorker : public ObjectCacheEntry {
 };
 
 shared_ptr<Model> GetModel(ClientContext &context, TableCatalogEntry &table) {
-	// Inner queries leave estimates to DuckDB. Models themselves are not modeled.
-	if (InInnerQuery() || table.ParentSchema().name == MODEL_SCHEMA) {
+	// Inner queries leave estimates to DuckDB.
+	if (InInnerQuery()) {
 		return nullptr;
 	}
 	auto entry = ObjectCache::GetObjectCache(context).GetOrCreate<CachedModel>(Key(table));
@@ -313,7 +302,7 @@ shared_ptr<Model> GetModel(ClientContext &context, TableCatalogEntry &table) {
 		InnerScope scope;
 		Connection con(*context.db);
 		entry->model = FitNow(context, con, table);
-		Save(context, con, table, *entry->model);
+		Save(context, table, *entry->model);
 	} catch (std::exception &) {
 		// e.g. an empty table, or one the fit connection cannot see.
 		entry->model = nullptr;

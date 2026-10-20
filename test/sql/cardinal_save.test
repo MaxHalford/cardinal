@@ -1,5 +1,5 @@
 # name: test/sql/cardinal_save.test
-# description: models and keys learned from queries are saved in the database
+# description: models and keys learned from queries are saved in the store
 # group: [sql]
 
 require cardinal
@@ -7,35 +7,33 @@ require cardinal
 load __TEST_DIR__/cardinal_save.db
 
 statement ok
+SET cardinal_store = '__TEST_DIR__/cardinal_save_store.db';
+
+statement ok
 CREATE TABLE movies AS SELECT range AS id, range % 50 AS year FROM range(1000);
 
 statement ok
 CREATE TABLE casts AS SELECT range % 1000 AS movie_id, range % 3 AS role FROM range(5000);
-
-statement ok
-SET cardinal_background = false;
 
 query I
 SELECT count(*) FROM movies m, casts c WHERE m.id = c.movie_id AND m.year < 10 AND c.role = 1;
 ----
 333
 
-# The join taught a key, saved with the models.
-query IIII
-SELECT fk_table, fk_column, pk_table, pk_column FROM __cardinal.keys;
+# The join taught a key: movies counts the casts of each movie.
+query III
+SELECT table_name, row_count, columns FROM cardinal_models();
 ----
-casts	movie_id	movies	id
-
-query II
-SELECT table_name, count(*) FROM __cardinal.columns GROUP BY ALL ORDER BY ALL;
-----
-casts	2
-movies	2
+casts	5000	[movie_id, role]
+movies	1000	['F(casts.movie_id)', year]
 
 # A new session finds them.
 restart
 
+statement ok
+SET cardinal_store = '__TEST_DIR__/cardinal_save_store.db';
+
 query I
-SELECT count(*) FROM __cardinal.keys;
+SELECT count(*) FROM cardinal_models();
 ----
-1
+2

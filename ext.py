@@ -4,8 +4,9 @@
     uv run ext.py plans <db> <out> <mode> ...
 
 warmup: one session plans every query of the workload, so the extension
-learns its filtered columns and keys, then CALL cardinal_fit_eager() saves
-models and keys in <db>. Later sessions start from them, as a user's would.
+learns its filtered columns and keys, then cardinal_fit_eager() saves models
+and keys in the benchmark's store, <out>/cardinal.db. Later sessions start
+from them, as a user's would.
 
 plans: P-error of the plans DuckDB picks with the extension in each mode
 (off, bn, fanout), costed with true cardinalities like plans.py. Each query
@@ -32,32 +33,34 @@ from ceq import ROOT, read_jsonl, write_jsonl
 
 EXTENSION = ROOT / "build/release/duckdb"
 
-# Deterministic: fits happen while planning, not on a worker thread.
-SETTINGS = "SET cardinal_background = false;"
+def settings(out):
+    """The benchmark's own store, so evaluations leave ~/.duckdb alone."""
+    return f"SET cardinal_store = '{pathlib.Path(out).resolve() / 'cardinal.db'}';"
 
 
 def warmup(db, out):
     queries = read_jsonl(pathlib.Path(out) / "queries.jsonl")
-    script = f"{SETTINGS}\nSET cardinal_estimator = 'fanout';\nDROP SCHEMA IF EXISTS __cardinal CASCADE;\n"
+    (pathlib.Path(out) / "cardinal.db").unlink(missing_ok=True)
+    script = f"{settings(out)}\nSET cardinal_estimator = 'fanout';\n"
     script += "\n".join("EXPLAIN " + q["sql"].rstrip().rstrip(";") + ";" for q in queries)
     script += "\nSELECT count(*), round(sum(seconds), 2) FROM cardinal_fit_eager();\n"
-    script += "SELECT count(*) FROM __cardinal.keys;\n"
+    script += "SELECT count(*) FROM cardinal_models();\n"
     result = subprocess.run([str(EXTENSION), "-csv", "-noheader", str(db)], input=script, capture_output=True,
                             text=True, check=True)
     # The last two lines: the fit, then the keys.
-    fitted, keys = result.stdout.strip().splitlines()[-2:]
+    fitted, saved = result.stdout.strip().splitlines()[-2:]
     tables, seconds = fitted.split(",")
-    print(f"{tables} tables fitted in {seconds} s, {keys} keys", file=sys.stderr)
+    print(f"{tables} tables fitted in {seconds} s, {saved} models saved", file=sys.stderr)
 
 
-def trace(db, sql, mode):
+def trace(db, out, sql, mode):
     """Events of planning sql twice in one process."""
     with tempfile.TemporaryDirectory() as tmp:
         path = pathlib.Path(tmp) / "trace.jsonl"
         env = {k: v for k, v in os.environ.items() if not k.startswith("DUCKDB_CE")}
         env["DUCKDB_CE_TRACE"] = str(path)
         explain = "EXPLAIN " + sql.rstrip().rstrip(";")
-        cmd = [str(EXTENSION), "-readonly", str(db), "-cmd", f"{SETTINGS} SET cardinal_estimator = '{mode}'",
+        cmd = [str(EXTENSION), "-readonly", str(db), "-cmd", f"{settings(out)} SET cardinal_estimator = '{mode}'",
                "-c", explain, "-c", explain]
         subprocess.run(cmd, env=env, check=True, capture_output=True, text=True)
         return read_jsonl(path)
@@ -94,7 +97,7 @@ def score(db, out, modes):
 
     for mode in modes:
         with concurrent.futures.ThreadPoolExecutor(8) as pool:
-            planned = list(pool.map(lambda q: second_plans(trace(db, q["sql"], mode), expected[q["query"]]), queries))
+            planned = list(pool.map(lambda q: second_plans(trace(db, out, q["sql"], mode), expected[q["query"]]), queries))
 
         rows = []
         for q, trees in zip(queries, planned):

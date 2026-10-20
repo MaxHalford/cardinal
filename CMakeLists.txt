@@ -18,6 +18,7 @@ set(EXTENSION_SOURCES
     src/inner_query.cpp
     src/model.cpp
     src/model_store.cpp
+    src/store.cpp
     src/models.cpp
     src/bn_estimator.cpp
     src/fit.cpp

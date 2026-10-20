@@ -5,6 +5,7 @@
 #include "inner_query.hpp"
 #include "join_planner.hpp"
 #include "models.hpp"
+#include "store.hpp"
 #include "scan_hook.hpp"
 
 #include "duckdb/main/config.hpp"
@@ -38,10 +39,12 @@ static void LoadInternal(ExtensionLoader &loader) {
 	auto &config = DBConfig::GetConfig(loader.GetDatabaseInstance());
 	config.AddExtensionOption(ESTIMATOR_SETTING, "Estimates given to the optimizer: fanout (scans and joins) or off",
 	                          LogicalType::VARCHAR, Value("fanout"));
-	config.AddExtensionOption(SAVE_SETTING, "Save fitted models in the database", LogicalType::BOOLEAN,
+	config.AddExtensionOption(SAVE_SETTING, "Save fitted models in the store", LogicalType::BOOLEAN,
 	                          Value::BOOLEAN(true));
+	config.AddExtensionOption(STORE_SETTING, "The store's file: ~/.duckdb/extension_data/cardinal/cardinal.db if empty",
+	                          LogicalType::VARCHAR, Value(""));
 	config.AddExtensionOption(BACKGROUND_SETTING, "Fit models on a worker thread: queries plan with what there is meanwhile",
-	                          LogicalType::BOOLEAN, Value::BOOLEAN(true));
+	                          LogicalType::BOOLEAN, Value::BOOLEAN(false));
 
 	OptimizerExtension extension;
 	extension.pre_optimize_function = PreOptimize;
@@ -49,6 +52,7 @@ static void LoadInternal(ExtensionLoader &loader) {
 	OptimizerExtension::Register(config, std::move(extension));
 
 	loader.RegisterFunction(FitFunctions());
+	loader.RegisterFunction(ModelsFunction());
 }
 
 void CardinalExtension::Load(ExtensionLoader &loader) {

@@ -8,4 +8,7 @@ namespace duckdb {
 //! and save them with the keys learned so far. No table: every table.
 TableFunctionSet FitFunctions();
 
+//! SELECT * FROM cardinal_models(): the models saved for the current database.
+TableFunction ModelsFunction();
+
 } // namespace duckdb

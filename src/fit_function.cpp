@@ -1,7 +1,7 @@
 #include "fit_function.hpp"
 #include "fit.hpp"
-#include "inner_query.hpp"
 #include "model_store.hpp"
+#include "inner_query.hpp"
 #include "keys.hpp"
 #include "models.hpp"
 
@@ -21,14 +21,11 @@ struct FitBindData : public TableFunctionData {
 };
 
 
-//! Every table of the default database, except the models themselves.
+//! Every table of the default database.
 static vector<QualifiedName> AllTables(ClientContext &context) {
 	vector<QualifiedName> tables;
 	auto &catalog = Catalog::GetCatalog(context, DatabaseManager::GetDefaultDatabase(context));
 	catalog.ScanSchemas(context, [&](SchemaCatalogEntry &schema) {
-		if (schema.name == MODEL_SCHEMA) {
-			return;
-		}
 		schema.Scan(context, CatalogType::TABLE_ENTRY, [&](CatalogEntry &entry) {
 			tables.emplace_back(catalog.GetName(), schema.name, entry.name);
 		});
@@ -127,7 +124,7 @@ static void Fit(ClientContext &context, TableFunctionInput &input, DataChunk &ou
 	auto &data = input.bind_data->Cast<FitBindData>();
 	auto &state = input.global_state->Cast<FitState>();
 
-	// First call: fit everything, write the models one table at a time.
+	// First call: fit everything, then save the models one table at a time, and the keys.
 	if (!state.fitted) {
 		state.fitted = true;
 		for (auto &name : data.tables) {
@@ -135,21 +132,19 @@ static void Fit(ClientContext &context, TableFunctionInput &input, DataChunk &ou
 		}
 		FitAll(*context.db, state.jobs, FitOptions());
 
-		InnerScope scope;
-		Connection con(*context.db);
+		Value save;
+		bool saving = !context.TryGetCurrentSetting(SAVE_SETTING, save) || save.GetValue<bool>();
 		for (auto &job : state.jobs) {
 			if (!job.error.empty()) {
 				throw InvalidInputException(job.error);
 			}
-			SaveModel(con, job.table.get(), *job.model);
+			if (saving) {
+				SaveModel(context, job.table.get(), *job.model);
+			}
 			PutModel(context, job.table.get(), job.model);
 		}
-		set<string> catalogs;
-		for (auto &job : state.jobs) {
-			catalogs.insert(job.table.get().ParentCatalog().GetName());
-		}
-		for (auto &catalog : catalogs) {
-			SaveKeys(con, catalog, context);
+		if (saving && !state.jobs.empty()) {
+			SaveKeys(context, state.jobs[0].table.get().ParentCatalog());
 		}
 	}
 
@@ -166,6 +161,46 @@ static void Fit(ClientContext &context, TableFunctionInput &input, DataChunk &ou
 		output.SetValue(3, row, Value::DOUBLE(job.seconds));
 	}
 	output.SetCardinality(row);
+}
+
+//! cardinal_models(): the models saved for the current database.
+static unique_ptr<FunctionData> ModelsBind(ClientContext &context, TableFunctionBindInput &input,
+                                           vector<LogicalType> &types, vector<string> &names) {
+	names = {"table_name", "row_count", "columns"};
+	types = {LogicalType::VARCHAR, LogicalType::BIGINT, LogicalType::LIST(LogicalType::VARCHAR)};
+	return make_uniq<TableFunctionData>();
+}
+
+struct ModelsState : public GlobalTableFunctionState {
+	vector<StoredModel> models;
+	idx_t next = 0;
+};
+
+static unique_ptr<GlobalTableFunctionState> ModelsInit(ClientContext &context, TableFunctionInitInput &input) {
+	auto state = make_uniq<ModelsState>();
+	auto &catalog = Catalog::GetCatalog(context, DatabaseManager::GetDefaultDatabase(context));
+	state->models = StoredModels(context, catalog);
+	return std::move(state);
+}
+
+static void Models(ClientContext &context, TableFunctionInput &input, DataChunk &output) {
+	auto &state = input.global_state->Cast<ModelsState>();
+	idx_t row = 0;
+	for (; state.next < state.models.size() && row < STANDARD_VECTOR_SIZE; state.next++, row++) {
+		auto &model = state.models[state.next];
+		vector<Value> columns;
+		for (auto &column : model.columns) {
+			columns.emplace_back(column);
+		}
+		output.SetValue(0, row, Value(model.table));
+		output.SetValue(1, row, Value::BIGINT(int64_t(model.rows)));
+		output.SetValue(2, row, Value::LIST(LogicalType::VARCHAR, std::move(columns)));
+	}
+	output.SetCardinality(row);
+}
+
+TableFunction ModelsFunction() {
+	return TableFunction("cardinal_models", {}, Models, ModelsBind, ModelsInit);
 }
 
 TableFunctionSet FitFunctions() {

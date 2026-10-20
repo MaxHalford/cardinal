@@ -15,7 +15,6 @@
 #pragma once
 
 #include "duckdb/catalog/catalog_entry/table_catalog_entry.hpp"
-#include "duckdb/main/connection.hpp"
 
 namespace duckdb {
 
@@ -51,9 +50,9 @@ void AddFilterColumns(ClientContext &context, TableCatalogEntry &table, const ve
 //! The columns queries filter on, sorted.
 vector<string> FilterColumns(ClientContext &context, TableCatalogEntry &table);
 
-//! Write the known foreign keys of a catalog to its __cardinal.keys table, replacing them.
-//! They are read back the first time the catalog is used.
-void SaveKeys(Connection &con, const string &catalog, ClientContext &context);
+//! Save the known foreign keys of a database in the store, replacing them. They are read back
+//! the first time the database is used. False when they were not saved.
+bool SaveKeys(ClientContext &context, Catalog &catalog);
 
 //! The table of a key column, if it still exists.
 optional_ptr<TableCatalogEntry> KeyTable(ClientContext &context, const KeyColumn &column);

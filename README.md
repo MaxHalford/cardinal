@@ -58,15 +58,7 @@ make release      # DuckDB with the extension: build/release/duckdb
 ```
 
 ```sql
-LOAD cardinal;    -- that's it
+LOAD cardinal;
 ```
 
-The extension learns from the queries it plans: the columns they filter on, and the primary and foreign keys they join. It fits a model per table on those, with a fanout column per foreign key, on a worker thread, and refits when a table's row count drifts by 10%. Models and keys are saved in the `__cardinal` schema of the database, unless it is read-only, in memory, or not a DuckDB database; `DROP SCHEMA __cardinal CASCADE` forgets them.
-
-DuckDB estimates joins with its own formula, from row counts and distinct counts. Per query, the extension fits those numbers to its join estimates, so DuckDB's optimizer plans with them.
-
-- `CALL cardinal_fit_eager(['table'])`: fit now, rather than when queries need it.
-- `SET cardinal_estimator = 'off'`: turn it off. `bn` (filtered scans only) and `exact` (true counts) are for experiments.
-- `SET cardinal_background = false`: queries wait for fits, for deterministic tests and benchmarks.
-
-`export.py` writes models fitted by `bn.py` instead. Tests: `make test`.
+How it behaves, where models live, settings and limits: [docs/extension.md](docs/extension.md). Tests: `make test`.
