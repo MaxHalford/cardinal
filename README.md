@@ -21,6 +21,8 @@ Notes are in `notes/`.
 
 ## Setup
 
+The research tools need DuckDB patched to trace and inject estimates. The extension does not: it builds and runs on stock DuckDB.
+
 ```sh
 git submodule update --init
 (cd duckdb && make release)
