@@ -1,6 +1,9 @@
 #include "join_estimator.hpp"
 #include "models.hpp"
 
+#include "duckdb/planner/expression/bound_constant_expression.hpp"
+#include "duckdb/planner/expression/bound_operator_expression.hpp"
+#include "duckdb/planner/expression/bound_reference_expression.hpp"
 #include "duckdb/storage/data_table.hpp"
 
 namespace duckdb {
@@ -104,8 +107,60 @@ bool JoinEstimator::Estimate(uint64_t set, double &card) {
 		}
 	}
 
+	// Fold small filtered dimensions that join only their foreign key in the set.
+	folded.clear();
+	folded_filters.clear();
+	duckdb::set<idx_t> dimensions;
+	for (auto &c : classes) {
+		auto &domain = domains[c.id];
+		if (!domain.folds || !c.d.IsValid() || c.fks.size() != 1 || !fk_of[c.d.GetIndex()].empty()) {
+			continue;
+		}
+		auto r = c.fks.begin()->first;
+		auto &relation = relations[r];
+		auto column = relation.model ? relation.model->Find(c.fks.begin()->second) : optional_idx();
+		if (!column.IsValid()) {
+			continue;
+		}
+
+		// R.fk IN (keys), on R's model.
+		auto &filters = folded_filters[r];
+		if (filters.types.empty()) {
+			filters.types = relation.filters.types;
+			if (filters.types.empty()) {
+				filters.types.assign(relation.model->Columns().size(), LogicalType::DOUBLE);
+			}
+			for (auto &expr : relation.filters.filters) {
+				filters.filters.push_back(expr->Copy());
+			}
+			filters.key = relation.filters.key;
+		}
+		auto &type = relation.model->Columns()[column.GetIndex()].type;
+		auto in = make_uniq<BoundOperatorExpression>(ExpressionType::COMPARE_IN, LogicalType::BOOLEAN);
+		in->children.push_back(make_uniq<BoundReferenceExpression>(type, column.GetIndex()));
+		string keys;
+		for (auto &key : domain.keys) {
+			Value value = key;
+			if (!value.DefaultTryCastAs(type)) {
+				continue;
+			}
+			keys += value.ToString() + ",";
+			in->children.push_back(make_uniq<BoundConstantExpression>(value));
+		}
+		if (in->children.size() == 1) {
+			// No key passes: no row of R joins.
+			card = 0;
+			return true;
+		}
+		filters.key += " AND #" + to_string(column.GetIndex()) + " IN (" + keys + ")";
+		filters.filters.push_back(std::move(in));
+		folded.insert(c.id);
+		dimensions.insert(c.d.GetIndex());
+	}
+
+	// The root is never a folded dimension: its foreign key accounts for it.
 	idx_t root = 0;
-	while (!Has(set, root)) {
+	while (!Has(set, root) || dimensions.count(root)) {
 		root++;
 	}
 	try {
@@ -165,8 +220,12 @@ double JoinEstimator::Weight(idx_t r, const Class *parent) {
 			scalar *= Average(*c, r);
 		}
 	}
-	auto &relation = relations[r];
-	return ExpectOn(relation.model.get(), &relation.filters, powers) * scalar;
+	return ExpectOn(relations[r].model.get(), &FiltersOf(r), powers) * scalar;
+}
+
+const PreparedFilters &JoinEstimator::FiltersOf(idx_t r) {
+	auto hit = folded_filters.find(r);
+	return hit != folded_filters.end() ? hit->second : relations[r].filters;
 }
 
 const Model *JoinEstimator::DomainModel(const Class &c) {
@@ -194,6 +253,10 @@ idx_t JoinEstimator::DomainRows(const Class &c) {
 
 //! Expected matches through class c per row of r, a foreign key in c.
 double JoinEstimator::Average(const Class &c, idx_t r) {
+	// Folded: r's filter keeps the rows whose key passes, each matching one row.
+	if (folded.count(c.id)) {
+		return 1.0;
+	}
 	map<string, idx_t> powers;
 	double scalar = 1.0;
 	Members(c, r, powers, scalar);
@@ -202,7 +265,7 @@ double JoinEstimator::Average(const Class &c, idx_t r) {
 	const PreparedFilters *filters = nullptr;
 	if (c.d.IsValid()) {
 		auto d = c.d.GetIndex();
-		filters = &relations[d].filters;
+		filters = &FiltersOf(d);
 		for (auto other : fk_of[d]) {
 			scalar *= Average(*other, d);
 		}

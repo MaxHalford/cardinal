@@ -18,6 +18,13 @@
 //                 c: the classes R is a foreign key in)
 //    avg(c, R) = |D| / |R| · E_D[1(f_D) · F_R · Π F_M] · Π weight(M) · ...
 //    card      = |root| · weight(root)
+//
+// A filtered dimension D, small enough to read, is folded into its foreign key
+// R when it joins nothing else in the set: the keys passing D's filters become
+// a filter on R, R.fk IN (keys), which R's model evaluates jointly with R's
+// own filters. Each such row of R matches one row of D. e.g. info_type with
+// info = 'genres' and movie_info with info IN ('Horror', ...): the genres only
+// occur with their info type, which independent filters would miss.
 //===----------------------------------------------------------------------===//
 
 #pragma once
@@ -45,6 +52,9 @@ struct JoinDomain {
 	KeyColumn key;
 	//! Invalid: the class has no known primary key, and cannot be estimated.
 	bool known = false;
+	//! Keys of the domain relation that pass its filters, when it is a small dimension.
+	bool folds = false;
+	vector<Value> keys;
 };
 
 class JoinEstimator {
@@ -78,10 +88,16 @@ private:
 	//! Models of domain tables outside the query.
 	map<idx_t, shared_ptr<Model>> domain_models;
 
+	//! A relation's filters with the keys of the dimensions folded into it, if any.
+	const PreparedFilters &FiltersOf(idx_t r);
+
 	//! The set being estimated.
 	vector<Class> classes;
 	map<idx_t, const Class *> domain_of;
 	map<idx_t, vector<const Class *>> fk_of;
+	//! Folded classes, and the filters of their foreign-key relations.
+	set<idx_t> folded;
+	map<idx_t, PreparedFilters> folded_filters;
 };
 
 } // namespace duckdb

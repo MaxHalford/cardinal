@@ -37,19 +37,19 @@ SELECT count(*) FROM users WHERE score > 10;
 
 # A model for users.score: 10 equally likely values.
 statement ok
-CREATE SCHEMA cardinal;
+CREATE SCHEMA __cardinal;
 
 statement ok
-CREATE TABLE cardinal.tables AS SELECT 'users' AS table_name, 1000 AS row_count;
+CREATE TABLE __cardinal.tables AS SELECT 'users' AS table_name, 1000 AS row_count;
 
 statement ok
-CREATE TABLE cardinal.columns AS SELECT 'users' AS table_name, 'score' AS column_name, NULL::VARCHAR AS parent, NULL::BIGINT AS members;
+CREATE TABLE __cardinal.columns AS SELECT 'users' AS table_name, 'score' AS column_name, NULL::VARCHAR AS parent, NULL::BIGINT AS members;
 
 statement ok
-CREATE TABLE cardinal.states AS SELECT 'users' AS table_name, 'score' AS column_name, range::INTEGER AS state, range::VARCHAR AS value, 'value' AS kind FROM range(10);
+CREATE TABLE __cardinal.states AS SELECT 'users' AS table_name, 'score' AS column_name, range::INTEGER AS state, range::VARCHAR AS value, 'value' AS kind FROM range(10);
 
 statement ok
-CREATE TABLE cardinal.probabilities AS SELECT 'users' AS table_name, 'score' AS column_name, range::INTEGER AS state, NULL::INTEGER AS parent_state, 0.1 AS probability FROM range(10);
+CREATE TABLE __cardinal.probabilities AS SELECT 'users' AS table_name, 'score' AS column_name, range::INTEGER AS state, NULL::INTEGER AS parent_state, 0.1 AS probability FROM range(10);
 
 statement ok
 SET cardinal_background = false;

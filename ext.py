@@ -36,10 +36,10 @@ SETTINGS = "SET cardinal_background = false;"
 
 def warmup(db, out):
     queries = read_jsonl(pathlib.Path(out) / "queries.jsonl")
-    script = f"{SETTINGS}\nSET cardinal_estimator = 'fanout';\nDROP SCHEMA IF EXISTS cardinal CASCADE;\n"
+    script = f"{SETTINGS}\nSET cardinal_estimator = 'fanout';\nDROP SCHEMA IF EXISTS __cardinal CASCADE;\n"
     script += "\n".join("EXPLAIN " + q["sql"].rstrip().rstrip(";") + ";" for q in queries)
     script += "\nSELECT count(*), round(sum(seconds), 2) FROM cardinal_fit_eager();\n"
-    script += "SELECT count(*) FROM cardinal.keys;\n"
+    script += "SELECT count(*) FROM __cardinal.keys;\n"
     result = subprocess.run([str(EXTENSION), "-csv", "-noheader", str(db)], input=script, capture_output=True,
                             text=True, check=True)
     # The last two lines: the fit, then the keys.

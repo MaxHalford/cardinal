@@ -61,7 +61,7 @@ make release      # DuckDB with the extension: build/release/duckdb
 LOAD cardinal;    -- that's it
 ```
 
-The extension learns from the queries it plans: the columns they filter on, and the primary and foreign keys they join. It fits a model per table on those, with a fanout column per foreign key, on a worker thread, and refits when a table's row count drifts by 10%. Models and keys are saved in the `cardinal` schema of the database, unless it is read-only, in memory, or not a DuckDB database; `DROP SCHEMA cardinal CASCADE` forgets them.
+The extension learns from the queries it plans: the columns they filter on, and the primary and foreign keys they join. It fits a model per table on those, with a fanout column per foreign key, on a worker thread, and refits when a table's row count drifts by 10%. Models and keys are saved in the `__cardinal` schema of the database, unless it is read-only, in memory, or not a DuckDB database; `DROP SCHEMA __cardinal CASCADE` forgets them.
 
 DuckDB estimates joins with its own formula, from row counts and distinct counts. Per query, the extension fits those numbers to its join estimates, so DuckDB's optimizer plans with them.
 

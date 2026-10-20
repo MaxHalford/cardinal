@@ -10,7 +10,7 @@ namespace duckdb {
 static mutex cache_lock;
 static unordered_map<string, idx_t> cache;
 
-static string CountQuery(LogicalGet &get, const vector<unique_ptr<Expression>> &filters) {
+string ScanQuery(LogicalGet &get, const vector<unique_ptr<Expression>> &filters, const string &select) {
 	vector<string> conditions;
 	for (auto &entry : get.table_filters.filters) {
 		// Optional filters only skip data: they never remove rows.
@@ -25,7 +25,7 @@ static string CountQuery(LogicalGet &get, const vector<unique_ptr<Expression>> &
 	}
 
 	auto &table = *get.GetTable();
-	auto sql = "SELECT count(*) FROM " + KeywordHelper::WriteOptionallyQuoted(table.ParentCatalog().GetName()) + "." +
+	auto sql = "SELECT " + select + " FROM " + KeywordHelper::WriteOptionallyQuoted(table.ParentCatalog().GetName()) + "." +
 	           KeywordHelper::WriteOptionallyQuoted(table.ParentSchema().name) + "." +
 	           KeywordHelper::WriteOptionallyQuoted(table.name);
 	if (!conditions.empty()) {
@@ -35,7 +35,7 @@ static string CountQuery(LogicalGet &get, const vector<unique_ptr<Expression>> &
 }
 
 optional_idx ExactCount(ClientContext &context, LogicalGet &get, const vector<unique_ptr<Expression>> &filters) {
-	auto sql = CountQuery(get, filters);
+	auto sql = ScanQuery(get, filters, "count(*)");
 
 	{
 		lock_guard<mutex> guard(cache_lock);

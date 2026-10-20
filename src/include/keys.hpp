@@ -51,7 +51,7 @@ void AddFilterColumns(ClientContext &context, TableCatalogEntry &table, const ve
 //! The columns queries filter on, sorted.
 vector<string> FilterColumns(ClientContext &context, TableCatalogEntry &table);
 
-//! Write the known foreign keys of a catalog to its cardinal.keys table, replacing them.
+//! Write the known foreign keys of a catalog to its __cardinal.keys table, replacing them.
 //! They are read back the first time the catalog is used.
 void SaveKeys(Connection &con, const string &catalog, ClientContext &context);
 

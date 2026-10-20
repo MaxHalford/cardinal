@@ -1,4 +1,6 @@
 #include "join_planner.hpp"
+#include "exact.hpp"
+#include "inner_query.hpp"
 #include "join_estimator.hpp"
 #include "keys.hpp"
 #include "models.hpp"
@@ -10,6 +12,9 @@ namespace duckdb {
 
 //! Connected sets fitted at most, smallest first.
 static constexpr idx_t MAX_SETS = 2000;
+
+//! A filtered domain with at most this many rows is read: its passing keys fold into the join.
+static constexpr idx_t MAX_DIMENSION_ROWS = 10000;
 
 //! Pull of the fit towards the starting values: only breaks ties between solutions.
 static constexpr double RIDGE = 1e-6;
@@ -72,6 +77,37 @@ static vector<JoinDomain> Domains(ClientContext &context, const QueryGraph &grap
 		}
 	}
 	return domains;
+}
+
+//! The keys of small filtered domains that pass their filters. Their foreign keys become
+//! filtered columns: models then cover them.
+static void DimensionKeys(ClientContext &context, const QueryGraph &graph, vector<JoinDomain> &domains) {
+	for (idx_t c = 0; c < graph.classes.size(); c++) {
+		auto &domain = domains[c];
+		if (!domain.known || !domain.relation.IsValid()) {
+			continue;
+		}
+		auto &relation = graph.relations[domain.relation.GetIndex()];
+		auto &get = relation.get.get();
+		auto &table = *get.GetTable();
+		if (TableRows(table) > MAX_DIMENSION_ROWS || FilteredColumns(get, relation.filters).empty()) {
+			continue;
+		}
+		auto result = InnerQuery(context, ScanQuery(get, relation.filters, KeywordHelper::WriteOptionallyQuoted(domain.key.column)));
+		if (!result) {
+			continue;
+		}
+		domain.folds = true;
+		for (idx_t i = 0; i < result->RowCount(); i++) {
+			domain.keys.push_back(result->GetValue(0, i));
+		}
+		for (auto &column : graph.classes[c]) {
+			if (column.first != domain.relation.GetIndex()) {
+				auto &fk_table = *graph.relations[column.first].get.get().GetTable();
+				AddFilterColumns(context, fk_table, {ColumnName(graph, column)});
+			}
+		}
+	}
 }
 
 //! Connected sets of relations, smallest first, at most MAX_SETS.
@@ -211,6 +247,7 @@ JoinTargets PlanJoins(ClientContext &context, Optimizer &optimizer, LogicalOpera
 		AddFilterColumns(context, *get.GetTable(), FilteredColumns(get, relation.filters));
 	}
 	auto domains = Domains(context, graph);
+	DimensionKeys(context, graph, domains);
 
 	// Relations, and their estimates after filters.
 	vector<JoinRelation> relations;

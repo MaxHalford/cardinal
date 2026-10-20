@@ -1,11 +1,10 @@
 //===----------------------------------------------------------------------===//
-// Models live in the cardinal schema of the database they describe:
+// Models live in the __cardinal schema of the database they describe:
 //
-//   cardinal.tables          table_name, row_count
-//   cardinal.columns         table_name, column_name, parent, members
-//   cardinal.states          table_name, column_name, state, value, kind
-//   cardinal.probabilities   table_name, column_name, state, parent_state,
-//                            probability
+//   tables          table_name, row_count
+//   columns         table_name, column_name, parent, members
+//   states          table_name, column_name, state, value, kind
+//   probabilities   table_name, column_name, state, parent_state, probability
 //
 // Values are text: they are cast to the table column's type when read.
 //===----------------------------------------------------------------------===//
@@ -32,12 +31,12 @@ static StateKind ParseKind(const string &kind) {
 	return StateKind::VALUE;
 }
 
-//! e.g. SELECT ... FROM "stats".cardinal.states WHERE table_name = 'users' ORDER BY ...
+//! e.g. SELECT ... FROM "stats".__cardinal.states WHERE table_name = 'users' ORDER BY ...
 static unique_ptr<MaterializedQueryResult> Select(ClientContext &context, TableCatalogEntry &table,
                                                   const string &columns, const string &from, const string &order,
                                                   const string &where = "") {
 	auto catalog = KeywordHelper::WriteOptionallyQuoted(table.ParentCatalog().GetName());
-	auto sql = "SELECT " + columns + " FROM " + catalog + ".cardinal." + from + " WHERE table_name = " +
+	auto sql = "SELECT " + columns + " FROM " + catalog + "." + MODEL_SCHEMA + "." + from + " WHERE table_name = " +
 	           Quote(table.name) + (where.empty() ? "" : " AND " + where) + (order.empty() ? "" : " ORDER BY " + order);
 	return InnerQuery(context, sql);
 }
@@ -109,11 +108,11 @@ shared_ptr<Model> ReadModel(ClientContext &context, TableCatalogEntry &table) {
 namespace duckdb {
 
 static const char *SCHEMA_SQL = R"(
-CREATE SCHEMA IF NOT EXISTS %s.cardinal;
-CREATE TABLE IF NOT EXISTS %s.cardinal.tables (table_name VARCHAR, row_count BIGINT);
-CREATE TABLE IF NOT EXISTS %s.cardinal.columns (table_name VARCHAR, column_name VARCHAR, parent VARCHAR, members BIGINT);
-CREATE TABLE IF NOT EXISTS %s.cardinal.states (table_name VARCHAR, column_name VARCHAR, state INTEGER, value VARCHAR, kind VARCHAR);
-CREATE TABLE IF NOT EXISTS %s.cardinal.probabilities (table_name VARCHAR, column_name VARCHAR, state INTEGER, parent_state INTEGER, probability DOUBLE);
+CREATE SCHEMA IF NOT EXISTS %s;
+CREATE TABLE IF NOT EXISTS %s.tables (table_name VARCHAR, row_count BIGINT);
+CREATE TABLE IF NOT EXISTS %s.columns (table_name VARCHAR, column_name VARCHAR, parent VARCHAR, members BIGINT);
+CREATE TABLE IF NOT EXISTS %s.states (table_name VARCHAR, column_name VARCHAR, state INTEGER, value VARCHAR, kind VARCHAR);
+CREATE TABLE IF NOT EXISTS %s.probabilities (table_name VARCHAR, column_name VARCHAR, state INTEGER, parent_state INTEGER, probability DOUBLE);
 )";
 
 static const char *KindName(StateKind kind) {
@@ -139,22 +138,23 @@ void SaveModel(Connection &con, TableCatalogEntry &table, const Model &model) {
 	auto name = table.name;
 
 	con.BeginTransaction();
-	auto schema = con.Query(StringUtil::Format(SCHEMA_SQL, catalog, catalog, catalog, catalog, catalog));
+	auto prefix = catalog + "." + MODEL_SCHEMA;
+	auto schema = con.Query(StringUtil::Format(SCHEMA_SQL, prefix, prefix, prefix, prefix, prefix));
 	if (schema->HasError()) {
 		con.Rollback();
 		throw InvalidInputException("cardinal: %s", schema->GetError());
 	}
 	for (auto from : {"tables", "columns", "states", "probabilities"}) {
-		Check(con.Query("DELETE FROM " + catalog + ".cardinal." + from + " WHERE table_name = " + Quote(name)));
+		Check(con.Query("DELETE FROM " + prefix + "." + from + " WHERE table_name = " + Quote(name)));
 	}
 
-	Appender tables(con, catalog_name, "cardinal", "tables");
+	Appender tables(con, catalog_name, MODEL_SCHEMA, "tables");
 	tables.AppendRow(Value(name), Value::BIGINT(int64_t(model.Rows())));
 	tables.Close();
 
-	Appender columns(con, catalog_name, "cardinal", "columns");
-	Appender states(con, catalog_name, "cardinal", "states");
-	Appender probabilities(con, catalog_name, "cardinal", "probabilities");
+	Appender columns(con, catalog_name, MODEL_SCHEMA, "columns");
+	Appender states(con, catalog_name, MODEL_SCHEMA, "states");
+	Appender probabilities(con, catalog_name, MODEL_SCHEMA, "probabilities");
 	auto &cols = model.Columns();
 	for (auto &col : cols) {
 		auto parent = col.parent.IsValid() ? Value(cols[col.parent.GetIndex()].name) : Value(LogicalType::VARCHAR);

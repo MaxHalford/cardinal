@@ -1,5 +1,6 @@
 #include "keys.hpp"
 #include "inner_query.hpp"
+#include "model_store.hpp"
 
 #include "duckdb/catalog/catalog.hpp"
 #include "duckdb/catalog/entry_lookup_info.hpp"
@@ -53,7 +54,7 @@ struct KeyRegistry : public ObjectCacheEntry {
 	set<string> loaded;
 };
 
-//! Stored foreign keys: catalog.cardinal.keys.
+//! Stored foreign keys: catalog.__cardinal.keys.
 static constexpr const char *KEYS_COLUMNS = "fk_schema, fk_table, fk_column, pk_schema, pk_table, pk_column";
 
 //! The registry, with the stored keys of the catalog read once.
@@ -67,7 +68,7 @@ static KeyRegistry &Registry(ClientContext &context, const string &catalog) {
 		registry.loaded.insert(catalog);
 	}
 	auto stored = InnerQuery(context, string("SELECT ") + KEYS_COLUMNS + " FROM " +
-	                                      KeywordHelper::WriteOptionallyQuoted(catalog) + ".cardinal.keys");
+	                                      KeywordHelper::WriteOptionallyQuoted(catalog) + "." + MODEL_SCHEMA + ".keys");
 	if (!stored) {
 		return registry;
 	}
@@ -207,10 +208,11 @@ void SaveKeys(Connection &con, const string &catalog, ClientContext &context) {
 			throw InvalidInputException("cardinal: %s", result->GetError());
 		}
 	};
-	check(con.Query("CREATE SCHEMA IF NOT EXISTS " + name + ".cardinal"));
-	check(con.Query("CREATE OR REPLACE TABLE " + name + ".cardinal.keys (fk_schema VARCHAR, fk_table VARCHAR, "
+	auto prefix = name + "." + MODEL_SCHEMA;
+	check(con.Query("CREATE SCHEMA IF NOT EXISTS " + prefix));
+	check(con.Query("CREATE OR REPLACE TABLE " + prefix + ".keys (fk_schema VARCHAR, fk_table VARCHAR, "
 	                "fk_column VARCHAR, pk_schema VARCHAR, pk_table VARCHAR, pk_column VARCHAR)"));
-	Appender appender(con, catalog, "cardinal", "keys");
+	Appender appender(con, catalog, MODEL_SCHEMA, "keys");
 	for (auto &key : keys) {
 		appender.AppendRow(Value(key.first.schema), Value(key.first.table), Value(key.first.column),
 		                   Value(key.second.schema), Value(key.second.table), Value(key.second.column));

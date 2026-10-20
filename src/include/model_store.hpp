@@ -7,8 +7,8 @@
 
 namespace duckdb {
 
-//! The schema models live in.
-static constexpr const char *MODEL_SCHEMA = "cardinal";
+//! The schema models live in. Double underscore: managed by the extension, as DuckLake does.
+static constexpr const char *MODEL_SCHEMA = "__cardinal";
 
 //! The model of a table stored in the cardinal schema of its database. Null: none.
 shared_ptr<Model> ReadModel(ClientContext &context, TableCatalogEntry &table);
