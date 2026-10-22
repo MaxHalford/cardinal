@@ -350,6 +350,14 @@ JoinTargets PlanJoins(ClientContext &context, Optimizer &optimizer, LogicalOpera
 			double offset;
 			FormulaRow(graph, sets[i], d, order, X[i], offset);
 			target[i] = y[i] - offset;
+
+			// Smaller sets weigh more: join order builds on them. Weight 1 / relations, e.g.
+			// a scan 1, a pair 1/2. Least squares weighs a row by the square of its scale.
+			auto scale = std::sqrt(1.0 / double(__builtin_popcountll(sets[i])));
+			for (auto &coefficient : X[i]) {
+				coefficient *= scale;
+			}
+			target[i] *= scale;
 		}
 		theta = RidgeSolve(X, target, start);
 	}
