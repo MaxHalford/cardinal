@@ -22,11 +22,11 @@ static Chunks ToChunks(const vector<Value> &values, const LogicalType &type) {
 		auto count = MinValue<idx_t>(STANDARD_VECTOR_SIZE, values.size() - offset);
 		auto chunk = make_uniq<DataChunk>();
 		chunk->Initialize(Allocator::DefaultAllocator(), {type});
+		// Since v2, vectors hold their own size: Append sets it, the chunk derives its own.
 		for (idx_t i = 0; i < count; i++) {
 			auto &value = values[offset + i];
-			chunk->SetValue(0, i, value.IsNull() ? Value(type) : value);
+			chunk->data[0].Append(value.IsNull() ? Value(type) : value.DefaultCastAs(type));
 		}
-		chunk->SetCardinality(count);
 		chunks.push_back(std::move(chunk));
 	}
 	return chunks;

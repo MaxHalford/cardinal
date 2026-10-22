@@ -156,12 +156,11 @@ static void Fit(ClientContext &context, TableFunctionInput &input, DataChunk &ou
 		for (auto &column : job.model->Columns()) {
 			states += column.values.size();
 		}
-		output.SetValue(0, row, Value(job.table.get().name));
-		output.SetValue(1, row, Value::BIGINT(int64_t(job.columns.size())));
-		output.SetValue(2, row, Value::BIGINT(int64_t(states)));
-		output.SetValue(3, row, Value::DOUBLE(job.seconds));
+		output.data[0].Append(Value(job.table.get().name));
+		output.data[1].Append(Value::BIGINT(int64_t(job.columns.size())));
+		output.data[2].Append(Value::BIGINT(int64_t(states)));
+		output.data[3].Append(Value::DOUBLE(job.seconds));
 	}
-	output.SetCardinality(row);
 }
 
 //! cardinal_models(): the models saved for the current database.
@@ -193,11 +192,10 @@ static void Models(ClientContext &context, TableFunctionInput &input, DataChunk 
 		for (auto &column : model.columns) {
 			columns.emplace_back(column);
 		}
-		output.SetValue(0, row, Value(model.table));
-		output.SetValue(1, row, Value::BIGINT(int64_t(model.rows)));
-		output.SetValue(2, row, Value::LIST(LogicalType::VARCHAR, std::move(columns)));
+		output.data[0].Append(Value(model.table));
+		output.data[1].Append(Value::BIGINT(int64_t(model.rows)));
+		output.data[2].Append(Value::LIST(LogicalType::VARCHAR, std::move(columns)));
 	}
-	output.SetCardinality(row);
 }
 
 TableFunction ModelsFunction() {

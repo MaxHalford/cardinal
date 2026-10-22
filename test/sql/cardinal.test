@@ -47,6 +47,17 @@ SELECT count(*) FROM users u, badges b WHERE b.user_id = u.id AND u.score >= 5;
 ----
 2500
 
+# IN: 3 of 10 scores, then 1. DuckDB alone guesses 20%: 200 rows.
+query II
+EXPLAIN SELECT * FROM users WHERE score IN (1, 2, 3);
+----
+physical_plan	<REGEX>:.*~300 rows.*
+
+query II
+EXPLAIN SELECT * FROM users WHERE score IN (3) OR id < 0;
+----
+physical_plan	<REGEX>:.*~100 rows.*
+
 # OR across columns: inclusion-exclusion.
 query I
 SELECT count(*) FROM users u WHERE u.score = 1 OR u.id < 10;
