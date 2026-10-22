@@ -9,6 +9,7 @@
 #include "scan_hook.hpp"
 
 #include "duckdb/common/bit_utils.hpp"
+#include "duckdb/optimizer/relation_statistics/relation_statistics_helper.hpp"
 #include "duckdb/storage/data_table.hpp"
 
 #include <bitset>
@@ -109,16 +110,19 @@ static void DimensionKeys(ClientContext &context, const QueryGraph &graph, vecto
 		auto &relation = graph.relations[domain.relation.GetIndex()];
 		auto &get = relation.get.get();
 		auto &table = *get.GetTable();
-		if (TableRows(table) > MAX_DIMENSION_ROWS || FilteredColumns(get, relation.filters).empty()) {
+		if (TableRows(table) > MAX_DIMENSION_ROWS) {
 			continue;
 		}
-		auto result = InnerQuery(context, ScanQuery(get, relation.filters, KeywordHelper::WriteOptionallyQuoted(domain.key.column)));
-		if (!result) {
-			continue;
-		}
-		domain.folds = true;
-		for (idx_t i = 0; i < result->RowCount(); i++) {
-			domain.keys.push_back(result->GetValue(0, i));
+		// Small: it folds under a filter across relations too, with the keys passing it.
+		domain.small = true;
+		if (!FilteredColumns(get, relation.filters).empty()) {
+			auto result = InnerQuery(context, ScanQuery(get, relation.filters, KeywordHelper::WriteOptionallyQuoted(domain.key.column)));
+			if (result) {
+				domain.folds = true;
+				for (idx_t i = 0; i < result->RowCount(); i++) {
+					domain.keys.push_back(result->GetValue(0, i));
+				}
+			}
 		}
 		for (auto &column : graph.classes[c]) {
 			if (column.first != domain.relation.GetIndex()) {
@@ -216,6 +220,13 @@ static void FormulaRow(const QueryGraph &graph, uint64_t members, const vector<d
 		}
 	}
 	offset = -std::log(1.0 + double(unused.size()));
+
+	// An OR across relations of the set: DuckDB applies its default selectivity.
+	for (auto &filter : graph.filters) {
+		if (filter.is_or && (filter.relations & ~members) == 0) {
+			offset += std::log(RelationStatisticsHelper::DEFAULT_SELECTIVITY);
+		}
+	}
 }
 
 //! Solves (XᵀX + λI) θ = Xᵀy + λθ0 by Gaussian elimination.
@@ -287,6 +298,18 @@ JoinTargets PlanJoins(ClientContext &context, Optimizer &optimizer, LogicalOpera
 		auto &get = relation.get.get();
 		AddFilterColumns(context, *get.GetTable(), FilteredColumns(get, relation.filters));
 	}
+	// Filters across relations: each relation's columns in them.
+	for (auto &filter : graph.filters) {
+		for (idx_t r = 0; r < count && filter.resolved; r++) {
+			if (!(filter.relations & (uint64_t(1) << r))) {
+				continue;
+			}
+			auto &get = graph.relations[r].get.get();
+			vector<unique_ptr<Expression>> expressions;
+			expressions.push_back(filter.expr->Copy());
+			AddFilterColumns(context, *get.GetTable(), FilteredColumns(get, expressions));
+		}
+	}
 	auto domains = Domains(context, graph);
 	DimensionKeys(context, graph, domains);
 
@@ -321,7 +344,7 @@ JoinTargets PlanJoins(ClientContext &context, Optimizer &optimizer, LogicalOpera
 		double card;
 		if (RelationCount(set) == 1) {
 			card = base[CountZeros<uint64_t>::Trailing(set)];
-		} else if (!estimator.Estimate(set, card) || card <= 0) {
+		} else if (!estimator.Estimate(set, card)) {
 			continue;
 		} else {
 			joins++;

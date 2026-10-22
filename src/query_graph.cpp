@@ -1,5 +1,6 @@
 #include "query_graph.hpp"
 
+#include "duckdb/common/bit_utils.hpp"
 #include "duckdb/optimizer/filter_pushdown.hpp"
 #include "duckdb/planner/expression/bound_cast_expression.hpp"
 #include "duckdb/planner/expression/bound_columnref_expression.hpp"
@@ -7,7 +8,10 @@
 #include "duckdb/planner/expression/bound_comparison_expression.hpp"
 #include "duckdb/planner/operator/logical_comparison_join.hpp"
 #include "duckdb/planner/operator/logical_filter.hpp"
+#include "duckdb/planner/expression_iterator.hpp"
 #include "duckdb/planner/operator/logical_projection.hpp"
+
+#include <bitset>
 
 namespace duckdb {
 namespace cardinal {
@@ -55,6 +59,7 @@ private:
 				continue;
 			}
 			columns[ColumnBinding(get.table_index, ProjectionIndex(i))] = GraphColumn(relation, ids[i].GetPrimaryIndex());
+			scan_binding[GraphColumn(relation, ids[i].GetPrimaryIndex())] = ColumnBinding(get.table_index, ProjectionIndex(i));
 		}
 	}
 
@@ -81,8 +86,47 @@ private:
 				if (relation != relation_of.end()) {
 					graph.relations[relation->second].filters.push_back(expr->Copy());
 				}
+				continue;
 			}
+			AddCrossFilter(*expr);
 		}
+	}
+
+	//! A filter above joins, with its column references traced to the scans. On one relation:
+	//! one of its filters. On several: a filter of the graph.
+	void AddCrossFilter(const Expression &expr) {
+		auto copy = expr.Copy();
+		uint64_t relations = 0;
+		bool resolved = true;
+		ExpressionIterator::VisitExpressionMutable<BoundColumnRefExpression>(
+		    copy, [&](BoundColumnRefExpression &ref, unique_ptr<Expression> &slot) {
+			    auto column = columns.find(ref.Binding());
+			    auto scan = column == columns.end() ? scan_binding.end() : scan_binding.find(column->second);
+			    if (scan == scan_binding.end()) {
+				    resolved = false;
+				    return;
+			    }
+			    relations |= uint64_t(1) << column->second.first;
+			    // Named, as the scan's own column: e.g. to read a dimension's passing keys with SQL.
+			    auto &get = graph.relations[column->second.first].get.get();
+			    slot = make_uniq<BoundColumnRefExpression>(get.names[column->second.second], ref.GetReturnType(),
+			                                               scan->second);
+		    });
+		if (!resolved) {
+			// Its relations are unknown: it may apply to any set.
+			graph.filters.push_back(GraphFilter {std::move(copy), ~uint64_t(0), false, false});
+			return;
+		}
+		auto count = std::bitset<64>(relations).count();
+		if (count == 0) {
+			return;
+		}
+		if (count == 1) {
+			graph.relations[CountZeros<uint64_t>::Trailing(relations)].filters.push_back(std::move(copy));
+			return;
+		}
+		bool is_or = copy->GetExpressionType() == ExpressionType::CONJUNCTION_OR;
+		graph.filters.push_back(GraphFilter {std::move(copy), relations, true, is_or});
 	}
 
 	void AddJoin(LogicalComparisonJoin &join) {
@@ -90,10 +134,19 @@ private:
 			return;
 		}
 		for (auto &condition : join.conditions) {
-			if (!condition.IsComparison() || condition.GetComparisonType() != ExpressionType::COMPARE_EQUAL) {
+			// e.g. an OR across both sides, pushed into the join.
+			if (!condition.IsComparison()) {
+				AddCrossFilter(condition.GetJoinExpression());
 				continue;
 			}
-			AddEdge(condition.GetLHS(), condition.GetRHS());
+			if (condition.GetComparisonType() == ExpressionType::COMPARE_EQUAL &&
+			    AddEdge(condition.GetLHS(), condition.GetRHS())) {
+				continue;
+			}
+			// e.g. a.x < b.y: a filter across the relations.
+			auto comparison = BoundComparisonExpression::Create(condition.GetComparisonType(), condition.GetLHS().Copy(),
+			                                                    condition.GetRHS().Copy());
+			AddCrossFilter(*comparison);
 		}
 	}
 
@@ -138,6 +191,8 @@ private:
 	QueryGraph &graph;
 	unordered_map<TableIndex, idx_t> relation_of;
 	column_binding_map_t<GraphColumn> columns;
+	//! The scan's binding of each relation column, for filters above joins.
+	map<GraphColumn, ColumnBinding> scan_binding;
 	set<pair<GraphColumn, GraphColumn>> seen;
 };
 

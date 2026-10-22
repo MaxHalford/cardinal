@@ -1,0 +1,47 @@
+# name: test/sql/cardinal_cross.test
+# description: filters across tables, e.g. (d.kind = 1 AND f.flag = 2) OR (...), are estimated jointly
+# group: [sql]
+
+require cardinal
+
+# A fact's flag is its dimension's kind: the filters below match no row, though each
+# part matches 10% of its table.
+statement ok
+CREATE TABLE dim (id INTEGER PRIMARY KEY, kind INTEGER);
+
+statement ok
+INSERT INTO dim SELECT range, range % 10 FROM range(100);
+
+statement ok
+CREATE TABLE fact AS SELECT range % 100 AS dim_id, (range % 100) % 10 AS flag FROM range(10000);
+
+statement ok
+SET cardinal_background = false;
+
+query I
+SELECT count(*) FROM fact f, dim d
+WHERE f.dim_id = d.id AND ((d.kind = 1 AND f.flag = 2) OR (d.kind = 2 AND f.flag = 3));
+----
+0
+
+# Without OR: the small dimension folds into the fact as dim_id IN (its passing keys), though
+# its keys are INTEGER and the fact's BIGINT. DuckDB alone guesses about 90 rows.
+query II
+EXPLAIN SELECT count(*) FROM fact f, dim d WHERE f.dim_id = d.id AND d.kind = 1 AND f.flag = 2;
+----
+physical_plan	<REGEX>:.*Hash Join.*~1 row[^s].*
+
+# DuckDB alone guesses 20% of the join for the OR: 2,000 rows. Matching kinds and flags make
+# about 2,000 too: cardinal must see the mismatch.
+query II
+EXPLAIN SELECT count(*) FROM fact f, dim d
+WHERE f.dim_id = d.id AND ((d.kind = 1 AND f.flag = 2) OR (d.kind = 2 AND f.flag = 3));
+----
+physical_plan	<REGEX>:.*Hash Join.*~1 row[^s].*
+
+# Matching kinds and flags: 20% of the facts.
+query II
+EXPLAIN SELECT count(*) FROM fact f, dim d
+WHERE f.dim_id = d.id AND ((d.kind = 1 AND f.flag = 1) OR (d.kind = 2 AND f.flag = 2));
+----
+physical_plan	<REGEX>:.*Hash Join.*~2,000 rows.*

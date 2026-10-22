@@ -61,6 +61,8 @@ struct JoinDomain {
 	//! Keys of the domain relation that pass its filters, when it is a small dimension.
 	bool folds = false;
 	vector<Value> keys;
+	//! The domain relation is small enough to read its keys.
+	bool small = false;
 };
 
 class JoinEstimator {
@@ -72,6 +74,15 @@ public:
 	bool Estimate(uint64_t set, double &card);
 
 private:
+	//! Conditions by relation: a branch of a filter across relations.
+	using Branch = map<idx_t, vector<const Expression *>>;
+
+	bool EstimateWith(uint64_t set, const Branch &conditions, double &card);
+	bool Split(const Expression &expr, vector<Branch> &result);
+	GraphColumn ColumnOf(const Expression &expr);
+	bool Override(idx_t r, const vector<const Expression *> &conditions);
+	//! A relation's filters, with the conditions of the current term.
+	const PreparedFilters &BaseFilters(idx_t r);
 
 	//! A class restricted to the set: domain relation, if in the set, and foreign keys.
 	struct Class {
@@ -92,6 +103,20 @@ private:
 	const QueryGraph &graph;
 	vector<JoinRelation> relations;
 	vector<JoinDomain> domains;
+	//! Relation of each scan, and class of each joined column.
+	unordered_map<TableIndex, idx_t> relation_of;
+	map<GraphColumn, idx_t> class_of;
+	//! Branches of each filter across relations. A branch on relation INVALID_INDEX: out of reach.
+	vector<vector<Branch>> filter_branches;
+	//! Relations' filters with a term's conditions: current ones, and all built.
+	map<idx_t, const PreparedFilters *> overrides;
+	Branch override_conditions;
+	map<string, PreparedFilters> override_filters;
+	//! Keys of a small dimension that pass its filters and a term's conditions, by filters key.
+	map<string, unique_ptr<vector<Value>>> override_keys;
+	//! The keys a folded class's dimension passes, null when it cannot fold.
+	const vector<Value> *FoldKeys(const Class &c);
+
 	//! Models of domain tables outside the query.
 	map<idx_t, shared_ptr<Model>> domain_models;
 	//! Rows of domain tables outside the query, by class. Invalid: not a DuckDB table.

@@ -87,9 +87,14 @@ static shared_ptr<Model> Read(Connection &con, const string &database, TableCata
 	for (idx_t i = 0; i < states.RowCount(); i++) {
 		auto &column = columns[index.at(states.GetValue(0, i).ToString())];
 		auto kind = ParseKind(states.GetValue(3, i).ToString());
+		// Stored as text: back to the column's type.
 		Value value = states.GetValue(2, i);
-		if (kind == StateKind::VALUE && !value.DefaultTryCastAs(column.type)) {
-			return nullptr;
+		if (kind == StateKind::VALUE) {
+			auto cast = value.DefaultTryCastAs(column.type);
+			if (!cast) {
+				return nullptr;
+			}
+			value = *cast;
 		}
 		column.kinds.push_back(kind);
 		column.values.push_back(kind == StateKind::VALUE ? value : Value());
