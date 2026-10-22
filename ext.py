@@ -67,9 +67,14 @@ def trace(db, out, sql, mode):
 
 
 def second_plans(events, expected):
-    """{dataset invocation: plan tree} of the second planning, or None if not found."""
+    """{dataset invocation: (plan tree, {relation set: estimate})} of the second planning, or None if not found."""
     tables = {e["inv"]: [r.get("table") for r in e["relations"]] for e in events if e["ev"] == "invocation"}
     trees = {e["inv"]: e["tree"] for e in events if e["ev"] == "plan"}
+    # The estimate DuckDB used for each set it asked about, e.g. {(0, 2): 4885.0}.
+    estimates = collections.defaultdict(dict)
+    for e in events:
+        if e["ev"] == "question":
+            estimates[e["inv"]][tuple(e["set"])] = e["est"]
     ids = sorted(tables)
     second = ids[len(ids) // 2:]
 
@@ -80,7 +85,7 @@ def second_plans(events, expected):
         if i < 0:
             return None
         if second[i] in trees:
-            found[inv] = trees[second[i]]
+            found[inv] = (trees[second[i]], estimates[second[i]])
         i -= 1
     return found
 
@@ -104,10 +109,12 @@ def score(db, out, modes):
             if trees is None:
                 print(f"{q['query']}: invocations not found", file=sys.stderr)
                 continue
-            row = {"query": q["query"], "missing": 0, "plans": trees}
+            row = {"query": q["query"], "missing": 0, "plans": {inv: t for inv, (t, _) in trees.items()},
+                   "estimates": [{"inv": inv, "set": list(s), "est": est}
+                                 for inv, (_, ests) in trees.items() for s, est in ests.items()]}
             for field, inner in (("cost", False), ("inner", True)):
                 card = lambda inv: lambda s: truth(q["query"], inv, s)
-                row[field] = sum(plans.cost(t, card(inv), inner) for inv, t in trees.items())
+                row[field] = sum(plans.cost(t, card(inv), inner) for inv, (t, _) in trees.items())
             if best[q["query"]]["cost"]:
                 row["p_error"] = row["cost"] / best[q["query"]]["cost"]
             if best[q["query"]]["inner"]:
