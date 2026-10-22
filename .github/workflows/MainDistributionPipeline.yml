@@ -2,9 +2,8 @@
 # Builds and tests the extension with DuckDB's own extension pipeline, as the community
 # extensions repository does for releases.
 #
-# Pushes to main build Linux and Windows, which catch most portability issues, and check
-# formatting. PRs, the weekly run and manual runs (e.g. a DuckDB upgrade branch) build every
-# platform and run clang-tidy.
+# Pushes to main build Linux, for fast feedback, and check formatting. PRs, the weekly run and
+# manual runs (e.g. a DuckDB upgrade branch) build every platform and run clang-tidy.
 #
 name: Main Extension Distribution Pipeline
 on:
@@ -30,7 +29,7 @@ jobs:
       ci_tools_version: v2.0-cyanoptera
       extension_name: cardinal
       # Fitting runs on worker threads: wasm builds lack them.
-      exclude_archs: ${{ github.event_name == 'push' && 'linux_arm64;linux_amd64_musl;linux_arm64_musl;osx_amd64;osx_arm64;windows_amd64_mingw;windows_arm64;wasm_mvp;wasm_eh;wasm_threads' || 'wasm_mvp;wasm_eh;wasm_threads' }}
+      exclude_archs: ${{ github.event_name == 'push' && 'linux_arm64;linux_amd64_musl;linux_arm64_musl;osx_amd64;osx_arm64;windows_amd64;windows_amd64_mingw;windows_arm64;wasm_mvp;wasm_eh;wasm_threads' || 'wasm_mvp;wasm_eh;wasm_threads' }}
 
   # DuckDB's formatting (clang-format 11) and static analysis (clang-tidy) rules.
   code-quality-check:
