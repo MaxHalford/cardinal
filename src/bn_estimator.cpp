@@ -362,7 +362,12 @@ bool PrepareFilters(LogicalGet &get, const vector<unique_ptr<Expression>> &filte
 		if (!Counts(entry.Filter())) {
 			continue;
 		}
-		auto primary = get.GetColumnIndex(entry.GetIndex()).GetPrimaryIndex();
+		// e.g. rowid < 10: no model column.
+		auto &index = get.GetColumnIndex(entry.GetIndex());
+		if (index.IsVirtualColumn() || index.GetPrimaryIndex() >= get.names.size()) {
+			return false;
+		}
+		auto primary = index.GetPrimaryIndex();
 		auto column = model.Find(get.names[primary].GetIdentifierName());
 		if (!column.IsValid()) {
 			return false;
@@ -475,7 +480,7 @@ optional_idx BNEstimate(ClientContext &context, LogicalGet &get, const vector<un
 	if (!PrepareFilters(get, filters, *model, prepared) || !Expect(context, *model, prepared, {}, p)) {
 		return optional_idx();
 	}
-	return idx_t(std::round(double(rows) * p));
+	return ToCount(double(rows) * p);
 }
 
 } // namespace cardinal

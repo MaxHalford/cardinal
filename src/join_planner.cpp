@@ -72,6 +72,10 @@ static vector<JoinDomain> Domains(ClientContext &context, const QueryGraph &grap
 				if (column != key) {
 					auto &fk_table = *graph.relations[column.first].get.get().GetTable();
 					KeyColumn fk(fk_table, ColumnName(graph, column));
+					// A self-join on the key, e.g. t1.id = t2.id: no foreign key.
+					if (fk.ToString() == domain.key.ToString()) {
+						continue;
+					}
 					AddForeignKey(context, fk, domain.key);
 					// Modeled: its NULL state tells which rows can join.
 					AddFilterColumns(context, fk_table, {fk.column});
@@ -208,7 +212,7 @@ static void FormulaRow(const QueryGraph &graph, uint64_t members, const vector<d
 		auto c = graph.edge_class[e];
 		if (components == 1) {
 			if (!used.count(c)) {
-				unused.insert(idx_t(MaxValue(std::round(std::exp(d[c])), 1.0)));
+				unused.insert(ToCount(std::exp(d[c])));
 			}
 			continue;
 		}
@@ -291,6 +295,12 @@ JoinTargets PlanJoins(ClientContext &context, Optimizer &optimizer, LogicalOpera
 	// Joins out of reach: DuckDB's estimates, not base estimates with DuckDB's join formula.
 	if (count > 64 || graph.edges.empty()) {
 		return HandsOff();
+	}
+	// Tables DuckDB does not store, e.g. attached Postgres ones: their row counts are unknown.
+	for (auto &relation : graph.relations) {
+		if (!relation.get.get().GetTable()->IsDuckTable()) {
+			return HandsOff();
+		}
 	}
 
 	// What the query teaches first: models then cover its filters and fanouts.
@@ -397,7 +407,7 @@ JoinTargets PlanJoins(ClientContext &context, Optimizer &optimizer, LogicalOpera
 		targets.rows[graph.relations[r].get.get().table_index] = MaxValue(std::exp(theta[r]), 1.0);
 	}
 	for (idx_t c = 0; c < graph.classes.size(); c++) {
-		auto distinct = idx_t(MaxValue(std::round(std::exp(theta[count + c])), 1.0));
+		auto distinct = ToCount(std::exp(theta[count + c]));
 		for (auto &column : graph.classes[c]) {
 			targets.distinct[make_pair(graph.relations[column.first].get.get().table_index, column.second)] = distinct;
 		}

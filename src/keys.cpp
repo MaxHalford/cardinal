@@ -219,11 +219,15 @@ bool SaveKeys(ClientContext &context, Catalog &catalog) {
 		}
 	}
 
-	// In one transaction: the keys of the database are replaced at once.
+	// In one transaction. Each foreign key replaces its own row only: keys another process
+	// learned and saved stay.
 	return WithStore(context, [&](Connection &con) {
 		con.BeginTransaction();
 		try {
-			StoreQuery(con, "DELETE FROM keys WHERE database = $1", {Value(database)});
+			for (auto &key : keys) {
+				StoreQuery(con, "DELETE FROM keys WHERE database = $1 AND fk_schema = $2 AND fk_table = $3 AND fk_column = $4",
+				           {Value(database), Value(key.first.schema), Value(key.first.table), Value(key.first.column)});
+			}
 			Appender appender(con, "keys");
 			for (auto &key : keys) {
 				appender.AppendRow(Value(database), Value(key.first.schema), Value(key.first.table),

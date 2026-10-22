@@ -145,7 +145,7 @@ static optional_idx Estimate(Estimator estimator, ClientContext &context, Logica
 		auto &targets = frames.back().targets.rows;
 		auto target = targets.find(get.table_index);
 		if (target != targets.end()) {
-			return idx_t(std::round(target->second));
+			return ToCount(target->second);
 		}
 		auto rows = TableRows(context, get.bind_data.get());
 		if (!rows.IsValid()) {
@@ -181,7 +181,7 @@ static void EstimateScan(ClientContext &context, LogicalGet &get, FunctionData *
 
 	// e.g. 1,000 estimated rows behind one range filter: 5,000, which DuckDB x 0.2 = 1,000.
 	auto base = std::round(double(rows.GetIndex()) / factor);
-	frames.back().rows[bind_data] = MaxValue<idx_t>(idx_t(base), 1);
+	frames.back().rows[bind_data] = ToCount(base);
 }
 
 //! pushdown_complex_filter: the filters stay as they are, only the row count changes.
@@ -200,14 +200,25 @@ static void ScanHook(ClientContext &context, LogicalGet &get, FunctionData *bind
 //! cardinality: the remembered base row count, else the scan's own.
 static unique_ptr<NodeStatistics> ScanCardinality(ClientContext &context, const FunctionData *bind_data) {
 	for (auto frame = frames.rbegin(); frame != frames.rend(); frame++) {
-		auto hit = frame->rows.find(bind_data);
-		if (hit != frame->rows.end()) {
-			return make_uniq<NodeStatistics>(hit->second);
-		}
 		auto original = frame->original.find(bind_data);
-		if (original != frame->original.end()) {
-			return original->second ? original->second(context, bind_data) : nullptr;
+		auto stats = original != frame->original.end() && original->second
+		                 ? original->second(context, bind_data)
+		                 : unique_ptr<NodeStatistics>();
+		auto hit = frame->rows.find(bind_data);
+		if (hit == frame->rows.end()) {
+			if (original != frame->original.end()) {
+				return stats;
+			}
+			continue;
 		}
+		// Keep the scan's own upper bound, which later optimizers rely on, and never below
+		// the estimate.
+		auto result = make_uniq<NodeStatistics>(hit->second);
+		if (stats && stats->has_max_cardinality) {
+			result->has_max_cardinality = true;
+			result->max_cardinality = MaxValue(stats->max_cardinality, hit->second);
+		}
+		return std::move(result);
 	}
 	return nullptr;
 }
@@ -259,11 +270,14 @@ static void AttachHooks(LogicalOperator &op) {
 }
 
 void AttachScanHooks(LogicalOperator &op) {
-	frames.emplace_back();
-	// Inner queries keep DuckDB's estimates: an empty frame, no hooks.
+	// Inner queries keep DuckDB's estimates: no frame, no hooks.
 	if (InInnerQuery()) {
 		return;
 	}
+	// A query planned on this thread, not an inner one: frames left by an optimizer run that
+	// threw are stale.
+	frames.clear();
+	frames.emplace_back();
 	AttachHooks(op);
 }
 
@@ -273,11 +287,33 @@ void SetJoinTargets(JoinTargets targets) {
 	}
 }
 
-void DetachScanHooks() {
-	// An optimizer run that throws leaves its frame: harmless, it is never on top again.
-	if (!frames.empty()) {
-		frames.pop_back();
+//! The scans' own callbacks again: estimates read after planning are DuckDB's.
+static void RestoreHooks(LogicalOperator &op, Frame &frame) {
+	for (auto &child : op.children) {
+		RestoreHooks(*child, frame);
 	}
+	if (op.type != LogicalOperatorType::LOGICAL_GET) {
+		return;
+	}
+	auto &get = op.Cast<LogicalGet>();
+	auto original = frame.original.find(get.bind_data.get());
+	if (!get.bind_data || get.function.cardinality != ScanCardinality || original == frame.original.end()) {
+		return;
+	}
+	get.function.cardinality = original->second;
+	get.function.pushdown_complex_filter = nullptr;
+	auto statistics = frame.original_statistics.find(get.bind_data.get());
+	if (statistics != frame.original_statistics.end()) {
+		get.function.statistics_extended = statistics->second;
+	}
+}
+
+void DetachScanHooks(LogicalOperator &plan) {
+	if (InInnerQuery() || frames.empty()) {
+		return;
+	}
+	RestoreHooks(plan, frames.back());
+	frames.pop_back();
 }
 
 } // namespace cardinal

@@ -13,6 +13,8 @@
 
 #pragma once
 
+#include <cmath>
+
 #include "duckdb/common/types/data_chunk.hpp"
 #include "duckdb/common/types/value.hpp"
 
@@ -53,6 +55,16 @@ struct ModelColumn {
 };
 
 //! The model column counting the rows of fk_table that reference each row,
+//! A row or distinct count from a double, rounded and kept in [1, 1e18]: a fit or a ratio can
+//! give 0, inf or NaN, and casting those to an integer is undefined.
+inline idx_t ToCount(double value) {
+	static constexpr double MAX_COUNT = 1e18;
+	if (!std::isfinite(value)) {
+		return value > 0 ? idx_t(MAX_COUNT) : 1;
+	}
+	return idx_t(MinValue(MaxValue(std::round(value), 1.0), MAX_COUNT));
+}
+
 //! e.g. "F(cast_info.movie_id)". Its states are bins, valued by their mean count.
 string FanoutName(const string &fk_table, const string &fk_column);
 

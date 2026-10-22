@@ -148,6 +148,10 @@ bool JoinEstimator::Estimate(uint64_t set, double &card) {
 	};
 	vector<Term> terms = {Term {1.0, {}}};
 	for (idx_t f = 0; f < graph.filters.size(); f++) {
+		// Its relations are unknown: it may filter any join.
+		if (!graph.filters[f].resolved) {
+			return false;
+		}
 		if ((graph.filters[f].relations & ~set) != 0) {
 			continue;
 		}
@@ -471,7 +475,8 @@ JoinEstimator::RelationFilters JoinEstimator::BuildFilters(idx_t r, const vector
 				continue;
 			}
 			auto &value = *cast;
-			keys += value.ToString() + ",";
+			// SQL literals: e.g. 'a,b' stays apart from 'a', 'b' in the cache key.
+			keys += value.ToSQLString() + ",";
 			in->GetChildrenMutable().push_back(make_uniq<BoundConstantExpression>(value));
 		}
 		if (in->GetChildren().size() == 1) {

@@ -112,7 +112,8 @@ private:
 		    copy, [&](BoundColumnRefExpression &ref, unique_ptr<Expression> &slot) {
 			    auto column = columns.find(ref.Binding());
 			    auto scan = column == columns.end() ? scan_binding.end() : scan_binding.find(column->second);
-			    if (scan == scan_binding.end()) {
+			    // Relations are bits of a 64-bit set.
+			    if (scan == scan_binding.end() || column->second.first >= 64) {
 				    resolved = false;
 				    return;
 			    }
@@ -123,7 +124,7 @@ private:
 			                                               scan->second);
 		    });
 		if (!resolved) {
-			// Its relations are unknown: it may apply to any set.
+			// Its relations are unknown: no join estimate can account for it.
 			graph.filters.push_back(GraphFilter {std::move(copy), ~uint64_t(0), false, false});
 			return;
 		}

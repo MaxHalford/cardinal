@@ -35,7 +35,7 @@ static void PreOptimize(OptimizerExtensionInput &input, unique_ptr<LogicalOperat
 
 //! Runs after DuckDB's optimizers.
 static void PostOptimize(OptimizerExtensionInput &input, unique_ptr<LogicalOperator> &plan) {
-	DetachScanHooks();
+	DetachScanHooks(*plan);
 }
 
 static void LoadInternal(ExtensionLoader &loader) {
