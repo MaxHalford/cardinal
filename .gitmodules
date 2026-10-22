@@ -17,3 +17,6 @@
 	path = extension-ci-tools
 	url = https://github.com/duckdb/extension-ci-tools
 	branch = v2.0-cyanoptera
+[submodule "vendor/dsb"]
+	path = vendor/dsb
+	url = https://github.com/microsoft/dsb.git

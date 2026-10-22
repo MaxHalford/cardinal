@@ -36,6 +36,8 @@ mkdir -p vendor/bin && cp duckdb/build/release/duckdb vendor/bin/duckdb-v2.0.0-b
 | JOB-light | `./scripts/fetch_imdb.sh && ./scripts/load_imdb.sh` | `vendor/learnedcardinalities/workloads/job-light.sql` |
 | JOB | same as JOB-light | `./scripts/job_queries.sh`, then `data/workloads/job` |
 | STATS-CEB | `./scripts/load_stats.sh` | `vendor/cardest-benchmark/workloads/stats_CEB/stats_CEB.sql` |
+| TPC-H (no harm check) | `./scripts/load_tpch.sh` | `data/workloads/tpch` |
+| DSB | `./scripts/load_dsb.sh` | `data/workloads/dsb` |
 
 ```sh
 w=vendor/learnedcardinalities/workloads/job-light.sql db=data/imdb.duckdb out=data/out/job-light
