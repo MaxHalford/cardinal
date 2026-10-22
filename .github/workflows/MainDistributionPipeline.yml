@@ -1,0 +1,24 @@
+#
+# Builds and tests the extension on every platform DuckDB distributes to, with DuckDB's own
+# extension pipeline. The community extensions repository builds releases the same way.
+#
+name: Main Extension Distribution Pipeline
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.head_ref || '' }}-${{ github.base_ref || '' }}-${{ github.ref != 'refs/heads/main' && github.sha || '' }}
+  cancel-in-progress: true
+
+jobs:
+  duckdb-stable-build:
+    name: Build extension binaries
+    uses: duckdb/extension-ci-tools/.github/workflows/_extension_distribution.yml@v2.0-cyanoptera
+    with:
+      duckdb_version: v2.0.0
+      ci_tools_version: v2.0-cyanoptera
+      extension_name: cardinal
+      # Fitting runs on worker threads: wasm builds lack them.
+      exclude_archs: 'wasm_mvp;wasm_eh;wasm_threads'

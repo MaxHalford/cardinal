@@ -8,7 +8,10 @@
 
 #include "scan_hook.hpp"
 
+#include "duckdb/common/bit_utils.hpp"
 #include "duckdb/storage/data_table.hpp"
+
+#include <bitset>
 
 namespace duckdb {
 namespace cardinal {
@@ -18,6 +21,11 @@ static constexpr idx_t MAX_SETS = 2000;
 
 //! A filtered domain with at most this many rows is read: its passing keys fold into the join.
 static constexpr idx_t MAX_DIMENSION_ROWS = 10000;
+
+//! Relations in a set, e.g. 3 for 0b1011. Portable: MSVC lacks __builtin_popcountll.
+static idx_t RelationCount(uint64_t set) {
+	return std::bitset<64>(set).count();
+}
 
 //! Pull of the fit towards the starting values: only breaks ties between solutions.
 static constexpr double RIDGE = 1e-6;
@@ -311,8 +319,8 @@ JoinTargets PlanJoins(ClientContext &context, Optimizer &optimizer, LogicalOpera
 	idx_t joins = 0;
 	for (auto set : ConnectedSets(graph)) {
 		double card;
-		if (__builtin_popcountll(set) == 1) {
-			card = base[__builtin_ctzll(set)];
+		if (RelationCount(set) == 1) {
+			card = base[CountZeros<uint64_t>::Trailing(set)];
 		} else if (!estimator.Estimate(set, card) || card <= 0) {
 			continue;
 		} else {
@@ -353,7 +361,7 @@ JoinTargets PlanJoins(ClientContext &context, Optimizer &optimizer, LogicalOpera
 
 			// Smaller sets weigh more: join order builds on them. Weight 1 / relations, e.g.
 			// a scan 1, a pair 1/2. Least squares weighs a row by the square of its scale.
-			auto scale = std::sqrt(1.0 / double(__builtin_popcountll(sets[i])));
+			auto scale = std::sqrt(1.0 / double(RelationCount(sets[i])));
 			for (auto &coefficient : X[i]) {
 				coefficient *= scale;
 			}
