@@ -11,10 +11,17 @@ on:
       - 'duckdb'
       - 'extension-ci-tools'
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   gate:
     runs-on: ubuntu-latest
     timeout-minutes: 300
+    env:
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      CCACHE_MAXSIZE: 2G
     steps:
       - uses: actions/checkout@v4
         with:
@@ -25,6 +32,13 @@ jobs:
 
       - uses: astral-sh/setup-uv@v6
 
+      # Compiled objects from earlier runs: most of DuckDB is unchanged between them.
+      - uses: actions/cache@v4
+        with:
+          path: .ccache
+          key: gate-ccache-${{ runner.os }}-${{ github.sha }}
+          restore-keys: gate-ccache-${{ runner.os }}-
+
       # The release the extension pins: the stress test loads it into that DuckDB.
       - name: Build
         env:
@@ -32,6 +46,7 @@ jobs:
         run: |
           export DUCKDB_VERSION=$(sed -n 's/.*duckdb_version: \(v[0-9.]*\).*/\1/p' .github/workflows/MainDistributionPipeline.yml | head -1)
           make release
+          ccache --show-stats
 
       - name: Extension tests
         run: ./build/release/test/unittest "test/*"

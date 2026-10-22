@@ -84,6 +84,9 @@ def chunk(args, start, count):
         return failed, f"chunk {start}: timeout"
     if not finished and started:
         return failed, started[-1]
+    # No summary and no test started: unittest itself failed, e.g. a bad config.
+    if not finished:
+        return failed, f"chunk {start}: no result"
     return failed, None
 
 
