@@ -10,6 +10,7 @@
 #include <thread>
 
 namespace duckdb {
+namespace cardinal {
 
 //! Version of the store's tables. A change starts a new store, as a DuckDB release does.
 static constexpr idx_t STORE_VERSION = 1;
@@ -106,4 +107,5 @@ bool WithStore(ClientContext &context, const std::function<void(Connection &)> &
 	}
 }
 
+} // namespace cardinal
 } // namespace duckdb

@@ -5,6 +5,7 @@
 #include "duckdb/planner/logical_operator.hpp"
 
 namespace duckdb {
+namespace cardinal {
 
 //! Which estimates the hooks give DuckDB, from the cardinal_estimator setting.
 //!   EXACT    scans: true counts, a test oracle
@@ -30,4 +31,5 @@ void AttachTargets(ClientContext &context, LogicalOperator &plan, const JoinTarg
 //! End the optimizer run started by the last AttachScanHooks or AttachTargets.
 void DetachScanHooks();
 
+} // namespace cardinal
 } // namespace duckdb

@@ -10,6 +10,7 @@
 #include "duckdb/planner/operator/logical_projection.hpp"
 
 namespace duckdb {
+namespace cardinal {
 
 //! Walks the analyzed plan bottom-up, resolving column bindings to relation columns.
 class GraphBuilder {
@@ -188,4 +189,5 @@ QueryGraph BuildGraph(Optimizer &optimizer, LogicalOperator &plan) {
 	return graph;
 }
 
+} // namespace cardinal
 } // namespace duckdb

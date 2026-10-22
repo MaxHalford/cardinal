@@ -10,6 +10,7 @@
 #include "duckdb/storage/object_cache.hpp"
 
 namespace duckdb {
+namespace cardinal {
 
 //! Below this share of distinct values per row, a column is not unique: no need to check.
 static constexpr double UNIQUE_HINT = 0.5;
@@ -248,4 +249,5 @@ optional_ptr<TableCatalogEntry> KeyTable(ClientContext &context, const KeyColumn
 	return &entry->Cast<TableCatalogEntry>();
 }
 
+} // namespace cardinal
 } // namespace duckdb

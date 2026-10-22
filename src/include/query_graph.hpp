@@ -18,6 +18,7 @@
 #include "duckdb/planner/operator/logical_get.hpp"
 
 namespace duckdb {
+namespace cardinal {
 
 //! A table scan of the query.
 struct GraphRelation {
@@ -50,4 +51,5 @@ struct QueryGraph {
 //! The join graph of a plan. Empty when the plan cannot be copied.
 QueryGraph BuildGraph(Optimizer &optimizer, LogicalOperator &plan);
 
+} // namespace cardinal
 } // namespace duckdb

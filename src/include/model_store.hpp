@@ -5,6 +5,7 @@
 #include "duckdb/catalog/catalog_entry/table_catalog_entry.hpp"
 
 namespace duckdb {
+namespace cardinal {
 
 //! The model of a table saved in the store. Null: none, or the store is unavailable.
 shared_ptr<Model> ReadModel(ClientContext &context, TableCatalogEntry &table);
@@ -22,4 +23,5 @@ struct StoredModel {
 //! The models saved for a database.
 vector<StoredModel> StoredModels(ClientContext &context, Catalog &catalog);
 
+} // namespace cardinal
 } // namespace duckdb

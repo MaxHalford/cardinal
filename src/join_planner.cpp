@@ -12,6 +12,7 @@
 #include "duckdb/storage/data_table.hpp"
 
 namespace duckdb {
+namespace cardinal {
 
 //! Connected sets fitted at most, smallest first.
 static constexpr idx_t MAX_SETS = 2000;
@@ -452,4 +453,5 @@ JoinTargets PlanJoins(ClientContext &context, Optimizer &optimizer, LogicalOpera
 	return HandsOff();
 }
 
+} // namespace cardinal
 } // namespace duckdb

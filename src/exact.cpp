@@ -7,6 +7,7 @@
 #include "duckdb/planner/table_filter.hpp"
 
 namespace duckdb {
+namespace cardinal {
 
 //! Counts by query text, shared by connections. Filter pushdown asks several times.
 static mutex cache_lock;
@@ -58,4 +59,5 @@ optional_idx ExactCount(ClientContext &context, LogicalGet &get, const vector<un
 	return rows;
 }
 
+} // namespace cardinal
 } // namespace duckdb

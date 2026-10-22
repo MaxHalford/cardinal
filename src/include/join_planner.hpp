@@ -19,6 +19,7 @@
 #include "duckdb/optimizer/optimizer.hpp"
 
 namespace duckdb {
+namespace cardinal {
 
 //! What the scan hooks report to DuckDB for one query.
 struct JoinTargets {
@@ -33,4 +34,5 @@ struct JoinTargets {
 //! Targets for the plan's joins. Empty when the plan has no join to estimate.
 JoinTargets PlanJoins(ClientContext &context, Optimizer &optimizer, LogicalOperator &plan);
 
+} // namespace cardinal
 } // namespace duckdb

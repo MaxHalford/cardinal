@@ -39,6 +39,7 @@
 #include "query_graph.hpp"
 
 namespace duckdb {
+namespace cardinal {
 
 //! A relation of the query, ready for estimates.
 struct JoinRelation {
@@ -111,4 +112,5 @@ private:
 	map<idx_t, PreparedFilters> key_filters;
 };
 
+} // namespace cardinal
 } // namespace duckdb

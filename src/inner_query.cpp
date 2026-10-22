@@ -4,6 +4,7 @@
 #include "duckdb/main/database.hpp"
 
 namespace duckdb {
+namespace cardinal {
 
 QueryRows::QueryRows(QueryResult &result) : collection(result.TakeCollection()) {
 	rows = make_uniq<ColumnDataRowCollection>(*collection);
@@ -49,4 +50,5 @@ unique_ptr<QueryRows> InnerQuery(ClientContext &context, const string &sql) {
 	}
 }
 
+} // namespace cardinal
 } // namespace duckdb

@@ -6,6 +6,7 @@
 #include "duckdb/catalog/catalog_entry/table_catalog_entry.hpp"
 
 namespace duckdb {
+namespace cardinal {
 
 //! Setting: fit models on a worker thread instead of while planning, e.g. SET cardinal_background = false.
 static constexpr const char *BACKGROUND_SETTING = "cardinal_background";
@@ -25,4 +26,5 @@ vector<FitFanout> KnownFanouts(ClientContext &context, TableCatalogEntry &table)
 //! Replace the model of a table in memory, e.g. after cardinal_fit.
 void PutModel(ClientContext &context, TableCatalogEntry &table, shared_ptr<Model> model);
 
+} // namespace cardinal
 } // namespace duckdb

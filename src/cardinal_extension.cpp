@@ -13,6 +13,9 @@
 
 namespace duckdb {
 
+// The extension's code: its own namespace, apart from DuckDB's names, e.g. duckdb::JoinRelation.
+using namespace cardinal;
+
 //! Runs before DuckDB's optimizers, so the hooks are in place for filter pushdown,
 //! and the join targets for join ordering.
 static void PreOptimize(OptimizerExtensionInput &input, unique_ptr<LogicalOperator> &plan) {

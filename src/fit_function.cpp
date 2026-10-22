@@ -14,6 +14,7 @@
 #include <thread>
 
 namespace duckdb {
+namespace cardinal {
 
 
 struct FitBindData : public TableFunctionData {
@@ -212,4 +213,5 @@ TableFunctionSet FitFunctions() {
 	return set;
 }
 
+} // namespace cardinal
 } // namespace duckdb

@@ -7,6 +7,7 @@
 #include "duckdb/storage/data_table.hpp"
 
 namespace duckdb {
+namespace cardinal {
 
 //! Thrown inside an estimate when the set is out of reach, e.g. a missing fanout.
 struct Unsupported {};
@@ -325,4 +326,5 @@ double JoinEstimator::Average(const Class &c, idx_t r) {
 	return double(DomainRows(c)) / double(MaxValue<idx_t>(relations[r].rows, 1)) * e * scalar;
 }
 
+} // namespace cardinal
 } // namespace duckdb

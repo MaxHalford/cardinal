@@ -35,6 +35,7 @@
 #include "duckdb/planner/table_filter.hpp"
 
 namespace duckdb {
+namespace cardinal {
 
 //! Inclusion-exclusion over more terms than this is too slow.
 static constexpr idx_t MAX_TERMS = 10;
@@ -479,4 +480,5 @@ optional_idx BNEstimate(ClientContext &context, LogicalGet &get, const vector<un
 	return idx_t(std::round(double(rows) * p));
 }
 
+} // namespace cardinal
 } // namespace duckdb

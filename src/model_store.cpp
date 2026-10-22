@@ -15,6 +15,7 @@
 #include "duckdb/main/appender.hpp"
 
 namespace duckdb {
+namespace cardinal {
 
 static StateKind ParseKind(const string &kind) {
 	if (kind == "null") {
@@ -211,4 +212,5 @@ vector<StoredModel> StoredModels(ClientContext &context, Catalog &catalog) {
 	return models;
 }
 
+} // namespace cardinal
 } // namespace duckdb

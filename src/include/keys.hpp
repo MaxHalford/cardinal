@@ -17,6 +17,7 @@
 #include "duckdb/catalog/catalog_entry/table_catalog_entry.hpp"
 
 namespace duckdb {
+namespace cardinal {
 
 //! A table column, by name: "catalog"."schema"."table" and column.
 struct KeyColumn {
@@ -57,4 +58,5 @@ bool SaveKeys(ClientContext &context, Catalog &catalog);
 //! The table of a key column, if it still exists.
 optional_ptr<TableCatalogEntry> KeyTable(ClientContext &context, const KeyColumn &column);
 
+} // namespace cardinal
 } // namespace duckdb

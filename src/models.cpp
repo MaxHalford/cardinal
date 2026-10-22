@@ -39,6 +39,7 @@
 #include <thread>
 
 namespace duckdb {
+namespace cardinal {
 
 //! Share of the row count a table may grow or shrink by before its model is refitted.
 static constexpr double MAX_DRIFT = 0.1;
@@ -321,4 +322,5 @@ void PutModel(ClientContext &context, TableCatalogEntry &table, shared_ptr<Model
 	entry->read = true;
 }
 
+} // namespace cardinal
 } // namespace duckdb

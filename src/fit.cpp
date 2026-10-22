@@ -30,6 +30,7 @@
 #include "duckdb/common/vector_operations/vector_operations.hpp"
 
 namespace duckdb {
+namespace cardinal {
 
 //! Columns with more distinct values than this are compacted.
 static constexpr idx_t MAX_STATES = 1000;
@@ -485,4 +486,5 @@ vector<FitColumn> FitColumns(ClientContext &context, TableCatalogEntry &table, c
 	return columns;
 }
 
+} // namespace cardinal
 } // namespace duckdb

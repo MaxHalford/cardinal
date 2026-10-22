@@ -19,6 +19,7 @@
 #include <functional>
 
 namespace duckdb {
+namespace cardinal {
 
 //! Setting: the store's path, e.g. SET cardinal_store = '/tmp/cardinal.db'. Empty: the default.
 static constexpr const char *STORE_SETTING = "cardinal_store";
@@ -33,4 +34,5 @@ unique_ptr<QueryRows> StoreQuery(Connection &con, const string &sql, vector<Valu
 //! the store cannot be opened, e.g. another process holds it, or when fn throws.
 bool WithStore(ClientContext &context, const std::function<void(Connection &)> &fn);
 
+} // namespace cardinal
 } // namespace duckdb

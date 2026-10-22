@@ -17,6 +17,7 @@
 #include "duckdb/common/types/value.hpp"
 
 namespace duckdb {
+namespace cardinal {
 
 enum class StateKind { VALUE, NULL_VALUE, OTHER };
 
@@ -88,4 +89,5 @@ private:
 	mutable unordered_map<string, double> selectivities;
 };
 
+} // namespace cardinal
 } // namespace duckdb

@@ -5,6 +5,7 @@
 #include "duckdb/main/query_result.hpp"
 
 namespace duckdb {
+namespace cardinal {
 
 //! A query's rows, materialized: read by column and row.
 class QueryRows {
@@ -37,4 +38,5 @@ bool InInnerQuery();
 //! Null when nested in another inner query, or when the query fails.
 unique_ptr<QueryRows> InnerQuery(ClientContext &context, const string &sql);
 
+} // namespace cardinal
 } // namespace duckdb

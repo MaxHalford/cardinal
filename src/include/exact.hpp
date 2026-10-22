@@ -4,6 +4,7 @@
 #include "duckdb/planner/operator/logical_get.hpp"
 
 namespace duckdb {
+namespace cardinal {
 
 //! A query over the rows of a scan that pass its filters: its table filters, and the filters
 //! above it. e.g. select "count(*)": SELECT count(*) FROM "imdb"."main"."title" WHERE ...
@@ -13,4 +14,5 @@ string ScanQuery(LogicalGet &get, const vector<unique_ptr<Expression>> &filters,
 //! A test oracle: it isolates the scan hook from estimation errors.
 optional_idx ExactCount(ClientContext &context, LogicalGet &get, const vector<unique_ptr<Expression>> &filters);
 
+} // namespace cardinal
 } // namespace duckdb

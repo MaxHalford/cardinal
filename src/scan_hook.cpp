@@ -38,6 +38,7 @@
 #include "duckdb/planner/operator/logical_get.hpp"
 
 namespace duckdb {
+namespace cardinal {
 
 //! Base row counts of the scans of one optimizer run, by bind data.
 //! A stack: the exact estimator plans its count queries inside a run.
@@ -316,4 +317,5 @@ void DetachScanHooks() {
 	}
 }
 
+} // namespace cardinal
 } // namespace duckdb

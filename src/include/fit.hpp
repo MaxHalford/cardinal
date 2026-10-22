@@ -6,6 +6,7 @@
 #include "duckdb/main/connection.hpp"
 
 namespace duckdb {
+namespace cardinal {
 
 struct FitOptions {
 	//! States of a compacted column, OTHER included.
@@ -42,4 +43,5 @@ vector<FitColumn> FitColumns(ClientContext &context, TableCatalogEntry &table, c
 shared_ptr<Model> FitModel(Connection &con, TableCatalogEntry &table, const vector<FitColumn> &columns,
                            const vector<FitFanout> &fanouts, const FitOptions &options);
 
+} // namespace cardinal
 } // namespace duckdb

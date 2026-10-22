@@ -1,6 +1,7 @@
 #include "model.hpp"
 
 namespace duckdb {
+namespace cardinal {
 
 string FanoutName(const string &fk_table, const string &fk_column) {
 	return "F(" + fk_table + "." + fk_column + ")";
@@ -144,4 +145,5 @@ double Model::Expectation(const Weights &weights) const {
 	return result;
 }
 
+} // namespace cardinal
 } // namespace duckdb

@@ -6,6 +6,7 @@
 #include "duckdb/planner/operator/logical_get.hpp"
 
 namespace duckdb {
+namespace cardinal {
 
 //! A scan's filters on a model: column references point to model columns.
 struct PreparedFilters {
@@ -36,4 +37,5 @@ vector<string> FilteredColumns(LogicalGet &get, const vector<unique_ptr<Expressi
 optional_idx BNEstimate(ClientContext &context, LogicalGet &get, const vector<unique_ptr<Expression>> &filters,
                         idx_t rows);
 
+} // namespace cardinal
 } // namespace duckdb
