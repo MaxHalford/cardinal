@@ -11,11 +11,33 @@ DuckDB picks a join order from estimates of how many rows each join produces. Th
 
 <br clear="right"/>
 
-## Usage
+## Installation
+
+Once cardinal is listed in DuckDB's [community extensions](https://duckdb.org/community_extensions/) (in progress), install it from any DuckDB client:
 
 ```sql
+INSTALL cardinal FROM community;
 LOAD cardinal;
 ```
+
+Until then, [build it](#building) and load the file, with unsigned extensions allowed:
+
+```sh
+duckdb -unsigned -c "LOAD 'build/release/extension/cardinal/cardinal.duckdb_extension';"
+```
+
+```python
+import duckdb
+
+con = duckdb.connect(config={"allow_unsigned_extensions": "true"})
+con.load_extension("build/release/extension/cardinal/cardinal.duckdb_extension")
+```
+
+The extension must be built for the same DuckDB version as the client loading it: v2.0.0.
+
+## Usage
+
+Once loaded, every query is planned with cardinal's estimates. Nothing else is needed.
 
 Models are fitted the first time a query needs them, saved, and refreshed when tables change. How it behaves, where models live, settings and limits: [docs/extension.md](docs/extension.md).
 
