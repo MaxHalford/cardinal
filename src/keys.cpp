@@ -69,7 +69,7 @@ static KeyRegistry &Registry(ClientContext &context, const string &catalog) {
 	}
 	string database;
 	try {
-		database = DatabaseKey(Catalog::GetCatalog(context, catalog));
+		database = DatabaseKey(Catalog::GetCatalog(context, Identifier(catalog)));
 	} catch (std::exception &) {
 	}
 	if (database.empty()) {
@@ -110,11 +110,11 @@ static bool DeclaredUnique(TableCatalogEntry &table, const string &column) {
 		}
 		auto &unique = constraint->Cast<UniqueConstraint>();
 		auto &names = unique.GetColumnNames();
-		if (names.size() == 1 && StringUtil::CIEquals(names[0], column)) {
+		if (names.size() == 1 && names[0] == Identifier(column)) {
 			return true;
 		}
 		if (names.empty() && unique.HasIndex() &&
-		    table.GetColumn(unique.GetIndex()).Name() == column) {
+		    table.GetColumn(unique.GetIndex()).Name() == Identifier(column)) {
 			return true;
 		}
 	}
@@ -123,7 +123,7 @@ static bool DeclaredUnique(TableCatalogEntry &table, const string &column) {
 
 //! Checks with a query: count(DISTINCT c) = count(c).
 static bool CheckUnique(ClientContext &context, TableCatalogEntry &table, const string &column) {
-	auto &definition = table.GetColumns().GetColumn(column);
+	auto &definition = table.GetColumns().GetColumn(Identifier(column));
 	auto stats = table.GetStatistics(context, definition.Logical().index);
 	auto rows = Rows(table);
 	if (stats && rows > 0 && double(stats->GetDistinctCount()) < UNIQUE_HINT * double(rows)) {
@@ -131,9 +131,9 @@ static bool CheckUnique(ClientContext &context, TableCatalogEntry &table, const 
 	}
 	auto name = KeywordHelper::WriteOptionallyQuoted(column);
 	auto result = InnerQuery(context, "SELECT count(DISTINCT " + name + ") = count(" + name + ") AND count(" + name +
-	                                      ") > 0 FROM " + KeywordHelper::WriteOptionallyQuoted(table.ParentCatalog().GetName()) +
-	                                      "." + KeywordHelper::WriteOptionallyQuoted(table.ParentSchema().name) + "." +
-	                                      KeywordHelper::WriteOptionallyQuoted(table.name));
+	                                      ") > 0 FROM " + KeywordHelper::WriteOptionallyQuoted(table.ParentCatalog().GetName().GetIdentifierName()) +
+	                                      "." + KeywordHelper::WriteOptionallyQuoted(table.ParentSchema().name.GetIdentifierName()) + "." +
+	                                      KeywordHelper::WriteOptionallyQuoted(table.name.GetIdentifierName()));
 	return result && result->GetValue(0, 0).GetValue<bool>();
 }
 
@@ -141,7 +141,7 @@ bool IsUnique(ClientContext &context, TableCatalogEntry &table, const string &co
 	if (DeclaredUnique(table, column)) {
 		return true;
 	}
-	auto &registry = Registry(context, table.ParentCatalog().GetName());
+	auto &registry = Registry(context, table.ParentCatalog().GetName().GetIdentifierName());
 	KeyColumn key(table, column);
 	auto rows = Rows(table);
 	{
@@ -175,7 +175,7 @@ bool ReferencedKey(ClientContext &context, const KeyColumn &fk, KeyColumn &pk) {
 }
 
 vector<pair<KeyColumn, string>> ReferencingKeys(ClientContext &context, TableCatalogEntry &table) {
-	auto &registry = Registry(context, table.ParentCatalog().GetName());
+	auto &registry = Registry(context, table.ParentCatalog().GetName().GetIdentifierName());
 	KeyColumn self(table, "");
 	vector<pair<KeyColumn, string>> result;
 	lock_guard<mutex> guard(registry.lock);
@@ -189,14 +189,14 @@ vector<pair<KeyColumn, string>> ReferencingKeys(ClientContext &context, TableCat
 }
 
 void AddFilterColumns(ClientContext &context, TableCatalogEntry &table, const vector<string> &columns) {
-	auto &registry = Registry(context, table.ParentCatalog().GetName());
+	auto &registry = Registry(context, table.ParentCatalog().GetName().GetIdentifierName());
 	lock_guard<mutex> guard(registry.lock);
 	auto &known = registry.filtered[KeyColumn(table, "").ToString()];
 	known.insert(columns.begin(), columns.end());
 }
 
 vector<string> FilterColumns(ClientContext &context, TableCatalogEntry &table) {
-	auto &registry = Registry(context, table.ParentCatalog().GetName());
+	auto &registry = Registry(context, table.ParentCatalog().GetName().GetIdentifierName());
 	lock_guard<mutex> guard(registry.lock);
 	auto &known = registry.filtered[KeyColumn(table, "").ToString()];
 	return vector<string>(known.begin(), known.end());
@@ -207,7 +207,7 @@ bool SaveKeys(ClientContext &context, Catalog &catalog) {
 	if (database.empty()) {
 		return false;
 	}
-	auto &registry = Registry(context, catalog.GetName());
+	auto &registry = Registry(context, catalog.GetName().GetIdentifierName());
 	vector<pair<KeyColumn, KeyColumn>> keys;
 	{
 		lock_guard<mutex> guard(registry.lock);
@@ -239,8 +239,9 @@ bool SaveKeys(ClientContext &context, Catalog &catalog) {
 }
 
 optional_ptr<TableCatalogEntry> KeyTable(ClientContext &context, const KeyColumn &column) {
-	EntryLookupInfo lookup(CatalogType::TABLE_ENTRY, column.table);
-	auto entry = Catalog::GetEntry(context, column.catalog, column.schema, lookup, OnEntryNotFound::RETURN_NULL);
+	QualifiedName name(Identifier(column.catalog), Identifier(column.schema), Identifier(column.table));
+	EntryLookupInfo lookup(CatalogType::TABLE_ENTRY, name);
+	auto entry = Catalog::GetEntry(context, lookup, OnEntryNotFound::RETURN_NULL);
 	if (!entry) {
 		return nullptr;
 	}

@@ -34,7 +34,7 @@ static vector<QualifiedName> AllTables(ClientContext &context) {
 }
 
 static unique_ptr<FunctionData> FitBind(ClientContext &context, TableFunctionBindInput &input,
-                                        vector<LogicalType> &types, vector<string> &names) {
+                                        vector<LogicalType> &types, vector<Identifier> &names) {
 	auto data = make_uniq<FitBindData>();
 	if (input.inputs.empty()) {
 		data->tables = AllTables(context);
@@ -79,7 +79,7 @@ static constexpr idx_t MAX_PARALLEL_FITS = 8;
 //! The table's columns to model, with their distinct counts. Runs in the caller's transaction.
 static FitJob Prepare(ClientContext &context, const FitBindData &data, const QualifiedName &name) {
 	auto &table =
-	    Catalog::GetEntry(context, CatalogType::TABLE_ENTRY, name.catalog, name.schema, name.name).Cast<TableCatalogEntry>();
+	    Catalog::GetEntry(context, CatalogType::TABLE_ENTRY, name).Cast<TableCatalogEntry>();
 
 	FitJob job(table);
 	// Default: the columns queries filter on, when known. Tables queries only join
@@ -165,7 +165,7 @@ static void Fit(ClientContext &context, TableFunctionInput &input, DataChunk &ou
 
 //! cardinal_models(): the models saved for the current database.
 static unique_ptr<FunctionData> ModelsBind(ClientContext &context, TableFunctionBindInput &input,
-                                           vector<LogicalType> &types, vector<string> &names) {
+                                           vector<LogicalType> &types, vector<Identifier> &names) {
 	names = {"table_name", "row_count", "columns"};
 	types = {LogicalType::VARCHAR, LogicalType::BIGINT, LogicalType::LIST(LogicalType::VARCHAR)};
 	return make_uniq<TableFunctionData>();

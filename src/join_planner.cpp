@@ -34,7 +34,7 @@ static idx_t TableRows(TableCatalogEntry &table) {
 }
 
 static string ColumnName(const QueryGraph &graph, const GraphColumn &column) {
-	return graph.relations[column.first].get.get().GetTable()->GetColumns().GetColumn(LogicalIndex(column.second)).Name();
+	return graph.relations[column.first].get.get().GetTable()->GetColumns().GetColumn(LogicalIndex(column.second)).Name().GetIdentifierName();
 }
 
 //! Each class's primary key: the unique column with the most rows, else the one its
@@ -249,7 +249,7 @@ static vector<double> RidgeSolve(const vector<vector<double>> &X, const vector<d
 }
 
 //! The relations under op, and the relation set of each join in it.
-static uint64_t JoinSets(LogicalOperator &op, const unordered_map<idx_t, idx_t> &relation_of, vector<uint64_t> &joins) {
+static uint64_t JoinSets(LogicalOperator &op, const unordered_map<TableIndex, idx_t> &relation_of, vector<uint64_t> &joins) {
 	uint64_t set = 0;
 	for (auto &child : op.children) {
 		set |= JoinSets(*child, relation_of, joins);
@@ -270,7 +270,7 @@ static uint64_t JoinSets(LogicalOperator &op, const unordered_map<idx_t, idx_t> 
 
 //! The joins of the order DuckDB picks for the analyzed plan, with the targets or without.
 static vector<uint64_t> DuckDBJoins(ClientContext &context, const QueryGraph &graph, optional_ptr<JoinTargets> targets) {
-	unordered_map<idx_t, idx_t> relation_of;
+	unordered_map<TableIndex, idx_t> relation_of;
 	for (idx_t r = 0; r < graph.relations.size(); r++) {
 		relation_of[graph.relations[r].get.get().table_index] = r;
 	}

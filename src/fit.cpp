@@ -22,7 +22,9 @@
 //===----------------------------------------------------------------------===//
 
 #include "fit.hpp"
+#include "inner_query.hpp"
 
+#include "duckdb/catalog/catalog.hpp"
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/common/types/column/column_data_collection.hpp"
 #include "duckdb/common/vector_operations/vector_operations.hpp"
@@ -47,7 +49,8 @@ static string Quote(const string &name) {
 
 //! The table's name in SQL: "catalog"."schema"."table".
 static string TableName(TableCatalogEntry &table) {
-	return Quote(table.ParentCatalog().GetName()) + "." + Quote(table.ParentSchema().name) + "." + Quote(table.name);
+	return Quote(table.ParentCatalog().GetName().GetIdentifierName()) + "." +
+	       Quote(table.ParentSchema().name.GetIdentifierName()) + "." + Quote(table.name.GetIdentifierName());
 }
 
 //! A sampled column: each row's value hash, and whether it is NULL.
@@ -375,7 +378,7 @@ static void Probabilities(const Codes &codes, ModelColumn &col, idx_t i, const v
 shared_ptr<Model> FitModel(Connection &con, TableCatalogEntry &table, const vector<FitColumn> &fits,
                            const vector<FitFanout> &fanouts, const FitOptions &options) {
 	auto from = TableName(table);
-	auto rows = idx_t(con.Query("SELECT count(*) FROM " + from)->GetValue(0, 0).GetValue<int64_t>());
+	auto rows = idx_t(QueryRows(*con.Query("SELECT count(*) FROM " + from)).GetValue(0, 0).GetValue<int64_t>());
 
 	// 1. Sample. Small tables are taken whole. Fanouts: one LEFT JOIN of counts per foreign key.
 	vector<string> names, joins;
@@ -435,7 +438,7 @@ shared_ptr<Model> FitModel(Connection &con, TableCatalogEntry &table, const vect
 		}
 		codes.emplace_back();
 		columns.push_back(
-		    BinFanout(FanoutName(fanouts[i].fk_table.get().name, fanouts[i].fk_column), counts, codes.back()));
+		    BinFanout(FanoutName(fanouts[i].fk_table.get().name.GetIdentifierName(), fanouts[i].fk_column), counts, codes.back()));
 	}
 	result.reset();
 
@@ -461,7 +464,7 @@ vector<FitColumn> FitColumns(ClientContext &context, TableCatalogEntry &table, c
 	for (auto &column : table.GetColumns().Logical()) {
 		auto named = names.empty() || std::find(names.begin(), names.end(), column.Name()) != names.end();
 		if (named && SupportedType(column.Type())) {
-			chosen.push_back(column.Name());
+			chosen.push_back(column.Name().GetIdentifierName());
 		}
 	}
 	if (chosen.empty()) {
@@ -472,7 +475,7 @@ vector<FitColumn> FitColumns(ClientContext &context, TableCatalogEntry &table, c
 	vector<FitColumn> columns;
 	for (auto &name : chosen) {
 		FitColumn column {name, optional_idx()};
-		auto &definition = table.GetColumns().GetColumn(name);
+		auto &definition = table.GetColumns().GetColumn(Identifier(name));
 		auto stats = table.GetStatistics(context, definition.Logical().index);
 		if (stats && stats->GetDistinctCount() > 0) {
 			column.distinct = stats->GetDistinctCount();

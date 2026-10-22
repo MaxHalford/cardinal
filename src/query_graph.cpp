@@ -3,6 +3,7 @@
 #include "duckdb/optimizer/filter_pushdown.hpp"
 #include "duckdb/planner/expression/bound_cast_expression.hpp"
 #include "duckdb/planner/expression/bound_columnref_expression.hpp"
+#include "duckdb/planner/column_binding_map.hpp"
 #include "duckdb/planner/expression/bound_comparison_expression.hpp"
 #include "duckdb/planner/operator/logical_comparison_join.hpp"
 #include "duckdb/planner/operator/logical_filter.hpp"
@@ -52,7 +53,7 @@ private:
 			if (ids[i].IsVirtualColumn()) {
 				continue;
 			}
-			columns[ColumnBinding(get.table_index, i)] = GraphColumn(relation, ids[i].GetPrimaryIndex());
+			columns[ColumnBinding(get.table_index, ProjectionIndex(i))] = GraphColumn(relation, ids[i].GetPrimaryIndex());
 		}
 	}
 
@@ -61,7 +62,7 @@ private:
 		for (idx_t i = 0; i < projection.expressions.size(); i++) {
 			auto column = Resolve(*projection.expressions[i]);
 			if (column.first != DConstants::INVALID_INDEX) {
-				columns[ColumnBinding(projection.table_index, i)] = column;
+				columns[ColumnBinding(projection.table_index, ProjectionIndex(i))] = column;
 			}
 		}
 	}
@@ -88,22 +89,22 @@ private:
 			return;
 		}
 		for (auto &condition : join.conditions) {
-			if (condition.comparison != ExpressionType::COMPARE_EQUAL) {
+			if (!condition.IsComparison() || condition.GetComparisonType() != ExpressionType::COMPARE_EQUAL) {
 				continue;
 			}
-			AddEdge(*condition.left, *condition.right);
+			AddEdge(condition.GetLHS(), condition.GetRHS());
 		}
 	}
 
 	bool AddEquality(Expression &expr) {
-		if (expr.GetExpressionType() != ExpressionType::COMPARE_EQUAL) {
+		if (!BoundComparisonExpression::IsComparison(expr) || expr.GetExpressionType() != ExpressionType::COMPARE_EQUAL) {
 			return false;
 		}
-		auto &comparison = expr.Cast<BoundComparisonExpression>();
-		return AddEdge(*comparison.left, *comparison.right);
+		auto &comparison = expr.Cast<BoundFunctionExpression>();
+		return AddEdge(BoundComparisonExpression::Left(comparison), BoundComparisonExpression::Right(comparison));
 	}
 
-	bool AddEdge(Expression &left, Expression &right) {
+	bool AddEdge(const Expression &left, const Expression &right) {
 		auto a = Resolve(left), b = Resolve(right);
 		if (a.first == DConstants::INVALID_INDEX || b.first == DConstants::INVALID_INDEX || a.first == b.first) {
 			return false;
@@ -118,15 +119,15 @@ private:
 
 	//! A column reference, possibly cast -> its relation column. Invalid for anything else.
 	//! e.g. CAST(t.id AS DOUBLE) = ci.person_role_id joins t.id, as for DuckDB.
-	GraphColumn Resolve(Expression &expr_p) {
-		reference<Expression> expr(expr_p);
-		while (expr.get().GetExpressionClass() == ExpressionClass::BOUND_CAST) {
-			expr = *expr.get().Cast<BoundCastExpression>().child;
+	GraphColumn Resolve(const Expression &expr_p) {
+		reference<const Expression> expr(expr_p);
+		while (BoundCastExpression::IsCast(expr.get())) {
+			expr = BoundCastExpression::Child(expr.get().Cast<BoundFunctionExpression>());
 		}
 		if (expr.get().GetExpressionClass() != ExpressionClass::BOUND_COLUMN_REF) {
 			return GraphColumn(DConstants::INVALID_INDEX, DConstants::INVALID_INDEX);
 		}
-		auto hit = columns.find(expr.get().Cast<BoundColumnRefExpression>().binding);
+		auto hit = columns.find(expr.get().Cast<BoundColumnRefExpression>().Binding());
 		if (hit == columns.end()) {
 			return GraphColumn(DConstants::INVALID_INDEX, DConstants::INVALID_INDEX);
 		}
@@ -134,7 +135,7 @@ private:
 	}
 
 	QueryGraph &graph;
-	unordered_map<idx_t, idx_t> relation_of;
+	unordered_map<TableIndex, idx_t> relation_of;
 	column_binding_map_t<GraphColumn> columns;
 	set<pair<GraphColumn, GraphColumn>> seen;
 };

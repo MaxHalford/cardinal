@@ -2,6 +2,8 @@
 #include "inner_query.hpp"
 
 #include "duckdb/catalog/catalog_entry/table_catalog_entry.hpp"
+#include "duckdb/catalog/catalog.hpp"
+#include "duckdb/planner/filter/expression_filter.hpp"
 #include "duckdb/planner/table_filter.hpp"
 
 namespace duckdb {
@@ -12,22 +14,22 @@ static unordered_map<string, idx_t> cache;
 
 string ScanQuery(LogicalGet &get, const vector<unique_ptr<Expression>> &filters, const string &select) {
 	vector<string> conditions;
-	for (auto &entry : get.table_filters.filters) {
+	for (auto &entry : get.table_filters) {
 		// Optional filters only skip data: they never remove rows.
-		if (entry.second->filter_type == TableFilterType::OPTIONAL_FILTER) {
+		if (ExpressionFilter::IsOptionalFilter(entry.Filter())) {
 			continue;
 		}
-		auto column = KeywordHelper::WriteOptionallyQuoted(get.names[entry.first]);
-		conditions.push_back(entry.second->ToString(column));
+		auto column = KeywordHelper::WriteOptionallyQuoted(get.names[entry.GetIndex()].GetIdentifierName());
+		conditions.push_back(ExpressionFilter::GetExpressionFilter(entry.Filter(), "cardinal").ToString(column));
 	}
 	for (auto &expr : filters) {
 		conditions.push_back(expr->ToString());
 	}
 
 	auto &table = *get.GetTable();
-	auto sql = "SELECT " + select + " FROM " + KeywordHelper::WriteOptionallyQuoted(table.ParentCatalog().GetName()) + "." +
-	           KeywordHelper::WriteOptionallyQuoted(table.ParentSchema().name) + "." +
-	           KeywordHelper::WriteOptionallyQuoted(table.name);
+	auto sql = "SELECT " + select + " FROM " + KeywordHelper::WriteOptionallyQuoted(table.ParentCatalog().GetName().GetIdentifierName()) + "." +
+	           KeywordHelper::WriteOptionallyQuoted(table.ParentSchema().name.GetIdentifierName()) + "." +
+	           KeywordHelper::WriteOptionallyQuoted(table.name.GetIdentifierName());
 	if (!conditions.empty()) {
 		sql += " WHERE " + StringUtil::Join(conditions, " AND ");
 	}

@@ -4,7 +4,6 @@
 #include "duckdb/common/local_file_system.hpp"
 #include "duckdb/main/attached_database.hpp"
 #include "duckdb/main/database.hpp"
-#include "duckdb/main/materialized_query_result.hpp"
 #include "duckdb/storage/storage_manager.hpp"
 
 #include <chrono>
@@ -53,16 +52,16 @@ static string StorePath(ClientContext &context) {
 	return fs.JoinPath(home, ".duckdb", "extension_data", "cardinal", "cardinal.db");
 }
 
-unique_ptr<MaterializedQueryResult> StoreQuery(Connection &con, const string &sql, vector<Value> parameters) {
+unique_ptr<QueryRows> StoreQuery(Connection &con, const string &sql, vector<Value> parameters) {
 	auto statement = con.Prepare(sql);
 	if (statement->HasError()) {
 		throw InvalidInputException("cardinal: %s", statement->GetError());
 	}
-	auto result = statement->Execute(parameters, false);
+	auto result = statement->Execute(parameters);
 	if (result->HasError()) {
 		throw InvalidInputException("cardinal: %s", result->GetError());
 	}
-	return unique_ptr_cast<QueryResult, MaterializedQueryResult>(std::move(result));
+	return make_uniq<QueryRows>(*result);
 }
 
 bool WithStore(ClientContext &context, const std::function<void(Connection &)> &fn) {

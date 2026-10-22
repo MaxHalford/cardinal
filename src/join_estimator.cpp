@@ -72,7 +72,7 @@ bool JoinEstimator::Estimate(uint64_t set, double &card) {
 				// Two columns of one relation in a class: a selection, not a join.
 				return false;
 			}
-			members[column.first] = relations[column.first].table.get().GetColumns().GetColumn(LogicalIndex(column.second)).Name();
+			members[column.first] = relations[column.first].table.get().GetColumns().GetColumn(LogicalIndex(column.second)).Name().GetIdentifierName();
 		}
 		if (members.size() < 2) {
 			continue;
@@ -137,7 +137,7 @@ bool JoinEstimator::Estimate(uint64_t set, double &card) {
 		}
 		auto &type = relation.model->Columns()[column.GetIndex()].type;
 		auto in = make_uniq<BoundOperatorExpression>(ExpressionType::COMPARE_IN, LogicalType::BOOLEAN);
-		in->children.push_back(make_uniq<BoundReferenceExpression>(type, column.GetIndex()));
+		in->GetChildrenMutable().push_back(make_uniq<BoundReferenceExpression>(type, column.GetIndex()));
 		string keys;
 		for (auto &key : domain.keys) {
 			Value value = key;
@@ -145,9 +145,9 @@ bool JoinEstimator::Estimate(uint64_t set, double &card) {
 				continue;
 			}
 			keys += value.ToString() + ",";
-			in->children.push_back(make_uniq<BoundConstantExpression>(value));
+			in->GetChildrenMutable().push_back(make_uniq<BoundConstantExpression>(value));
 		}
-		if (in->children.size() == 1) {
+		if (in->GetChildren().size() == 1) {
 			// No key passes: no row of R joins.
 			card = 0;
 			return true;
@@ -185,7 +185,7 @@ bool JoinEstimator::Estimate(uint64_t set, double &card) {
 			auto &type = model.Columns()[column.GetIndex()].type;
 			for (auto target : {&with, &alone}) {
 				auto not_null = make_uniq<BoundOperatorExpression>(ExpressionType::OPERATOR_IS_NOT_NULL, LogicalType::BOOLEAN);
-				not_null->children.push_back(make_uniq<BoundReferenceExpression>(type, column.GetIndex()));
+				not_null->GetChildrenMutable().push_back(make_uniq<BoundReferenceExpression>(type, column.GetIndex()));
 				target->filters.push_back(std::move(not_null));
 				target->key += " AND #" + to_string(column.GetIndex()) + " IS NOT NULL";
 			}
@@ -240,7 +240,7 @@ void JoinEstimator::Members(const Class &c, optional_idx skip, map<string, idx_t
 		if (skip.IsValid() && fk.first == skip.GetIndex()) {
 			continue;
 		}
-		powers[FanoutName(relations[fk.first].table.get().name, fk.second)]++;
+		powers[FanoutName(relations[fk.first].table.get().name.GetIdentifierName(), fk.second)]++;
 		scalar *= Weight(fk.first, &c);
 	}
 }
@@ -310,7 +310,7 @@ double JoinEstimator::Average(const Class &c, idx_t r) {
 	map<string, idx_t> powers;
 	double scalar = 1.0;
 	Members(c, r, powers, scalar);
-	powers[FanoutName(relations[r].table.get().name, c.fks.at(r))]++;
+	powers[FanoutName(relations[r].table.get().name.GetIdentifierName(), c.fks.at(r))]++;
 
 	double e;
 	if (c.d.IsValid()) {

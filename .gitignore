@@ -6,3 +6,4 @@ __pycache__/
 build/
 .cache/
 data/out/*/cardinal.db
+duckdb_unittest_tempdir/

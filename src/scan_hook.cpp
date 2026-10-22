@@ -31,7 +31,7 @@
 
 #include "duckdb/main/client_context.hpp"
 #include "duckdb/optimizer/filter_pushdown.hpp"
-#include "duckdb/optimizer/join_order/relation_statistics_helper.hpp"
+#include "duckdb/optimizer/relation_statistics/relation_statistics_helper.hpp"
 #include "duckdb/optimizer/optimizer.hpp"
 #include "duckdb/planner/binder.hpp"
 #include "duckdb/planner/operator/logical_filter.hpp"
@@ -45,7 +45,7 @@ struct Frame {
 	unordered_map<const FunctionData *, idx_t> rows;
 	unordered_map<const FunctionData *, table_function_cardinality_t> original;
 	unordered_map<const FunctionData *, table_statistics_extended_t> original_statistics;
-	unordered_map<const FunctionData *, idx_t> table_index;
+	unordered_map<const FunctionData *, TableIndex> table_index;
 	JoinTargets targets;
 };
 static thread_local vector<Frame> frames;
@@ -72,6 +72,11 @@ Estimator CurrentEstimator(ClientContext &context) {
 	return Estimator::OFF;
 }
 
+//! cardinality of the probe scan.
+static unique_ptr<NodeStatistics> ProbeCardinality(ClientContext &context, const FunctionData *bind_data) {
+	return make_uniq<NodeStatistics>(PROBE_ROWS);
+}
+
 //! Share of a scan's rows DuckDB keeps after these filters, by its own rules.
 //! Runs DuckDB's filter pushdown and scan statistics on a copy of the scan.
 //! Returns 0 when the filters are unsatisfiable.
@@ -79,8 +84,8 @@ static double FilterFactor(ClientContext &context, LogicalGet &get, const vector
 	// The copy comes from the catalog, without the hook.
 	auto copy = get.Copy(context);
 	auto &probe = copy->Cast<LogicalGet>();
-	probe.estimated_cardinality = PROBE_ROWS;
-	probe.has_estimated_cardinality = true;
+	probe.function.cardinality = ProbeCardinality;
+	probe.function.pushdown_complex_filter = nullptr;
 
 	unique_ptr<LogicalOperator> root = std::move(copy);
 	if (!filters.empty()) {

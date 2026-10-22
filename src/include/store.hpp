@@ -14,6 +14,7 @@
 
 #include "duckdb/catalog/catalog.hpp"
 #include "duckdb/main/connection.hpp"
+#include "inner_query.hpp"
 
 #include <functional>
 
@@ -26,7 +27,7 @@ static constexpr const char *STORE_SETTING = "cardinal_store";
 string DatabaseKey(Catalog &catalog);
 
 //! A query on the store with parameters $1, $2, ... Throws when it fails.
-unique_ptr<MaterializedQueryResult> StoreQuery(Connection &con, const string &sql, vector<Value> parameters);
+unique_ptr<QueryRows> StoreQuery(Connection &con, const string &sql, vector<Value> parameters);
 
 //! Run fn on a connection to the store, its tables created. Uses are serialized. False when
 //! the store cannot be opened, e.g. another process holds it, or when fn throws.

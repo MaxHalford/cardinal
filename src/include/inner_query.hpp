@@ -1,9 +1,23 @@
 #pragma once
 
 #include "duckdb/main/client_context.hpp"
-#include "duckdb/main/materialized_query_result.hpp"
+#include "duckdb/common/types/column/column_data_collection.hpp"
+#include "duckdb/main/query_result.hpp"
 
 namespace duckdb {
+
+//! A query's rows, materialized: read by column and row.
+class QueryRows {
+public:
+	explicit QueryRows(QueryResult &result);
+
+	Value GetValue(idx_t column, idx_t row) const;
+	idx_t RowCount() const;
+
+private:
+	unique_ptr<ColumnDataCollection> collection;
+	unique_ptr<ColumnDataRowCollection> rows;
+};
 
 //! Marks this thread as running inner queries, until destroyed.
 class InnerScope {
@@ -21,6 +35,6 @@ bool InInnerQuery();
 
 //! Run a query from inside the optimizer, on its own connection.
 //! Null when nested in another inner query, or when the query fails.
-unique_ptr<MaterializedQueryResult> InnerQuery(ClientContext &context, const string &sql);
+unique_ptr<QueryRows> InnerQuery(ClientContext &context, const string &sql);
 
 } // namespace duckdb

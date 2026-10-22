@@ -38,7 +38,7 @@ static const char *KindName(StateKind kind) {
 }
 
 //! e.g. SELECT ... FROM states WHERE database = $1 AND table_name = $2 ORDER BY ...
-static unique_ptr<MaterializedQueryResult> Select(Connection &con, const string &database, TableCatalogEntry &table,
+static unique_ptr<QueryRows> Select(Connection &con, const string &database, TableCatalogEntry &table,
                                                   const string &columns, const string &from,
                                                   const string &order = "") {
 	return StoreQuery(con,
@@ -76,7 +76,7 @@ static shared_ptr<Model> Read(Connection &con, const string &database, TableCata
 	// Fanout columns, e.g. F(badges.UserId), are not table columns: their states are mean counts.
 	auto &table_columns = table.GetColumns();
 	for (auto &column : columns) {
-		column.type = table_columns.ColumnExists(column.name) ? table_columns.GetColumn(column.name).Type()
+		column.type = table_columns.ColumnExists(Identifier(column.name)) ? table_columns.GetColumn(Identifier(column.name)).Type()
 		                                                      : LogicalType::DOUBLE;
 	}
 
@@ -189,22 +189,23 @@ vector<StoredModel> StoredModels(ClientContext &context, Catalog &catalog) {
 	if (database.empty()) {
 		return models;
 	}
+	// Plain SQL, grouped here: the store's instance may lack core functions, e.g. list().
 	WithStore(context, [&](Connection &con) {
 		auto result = StoreQuery(con,
-		                         "SELECT t.table_name, t.row_count, list(c.column_name ORDER BY c.column_name) "
+		                         "SELECT t.table_name, t.row_count, c.column_name "
 		                         "FROM tables t JOIN columns c USING (database, table_name) "
-		                         "WHERE database = $1 GROUP BY ALL ORDER BY t.table_name",
+		                         "WHERE database = $1 ORDER BY t.table_name, c.column_name",
 		                         {Value(database)});
 		auto &rows = *result;
 		for (idx_t i = 0; i < rows.RowCount(); i++) {
-			StoredModel model;
-			model.table = rows.GetValue(0, i).ToString();
-			model.rows = idx_t(rows.GetValue(1, i).GetValue<int64_t>());
-			auto columns = rows.GetValue(2, i);
-			for (auto &column : ListValue::GetChildren(columns)) {
-				model.columns.push_back(column.ToString());
+			auto table = rows.GetValue(0, i).ToString();
+			if (models.empty() || models.back().table != table) {
+				StoredModel model;
+				model.table = table;
+				model.rows = idx_t(rows.GetValue(1, i).GetValue<int64_t>());
+				models.push_back(std::move(model));
 			}
-			models.push_back(std::move(model));
+			models.back().columns.push_back(rows.GetValue(2, i).ToString());
 		}
 	});
 	return models;

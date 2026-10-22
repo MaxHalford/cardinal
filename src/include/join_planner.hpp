@@ -23,9 +23,9 @@ namespace duckdb {
 //! What the scan hooks report to DuckDB for one query.
 struct JoinTargets {
 	//! Rows after filters, by scan table_index.
-	unordered_map<idx_t, double> rows;
+	unordered_map<TableIndex, double> rows;
 	//! Distinct values, by scan table_index and table column.
-	map<pair<idx_t, idx_t>, idx_t> distinct;
+	map<pair<TableIndex, idx_t>, idx_t> distinct;
 	//! Leave the query to DuckDB, scans included: its plan was not believed worse.
 	bool hands_off = false;
 };

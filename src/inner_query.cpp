@@ -5,6 +5,18 @@
 
 namespace duckdb {
 
+QueryRows::QueryRows(QueryResult &result) : collection(result.TakeCollection()) {
+	rows = make_uniq<ColumnDataRowCollection>(*collection);
+}
+
+Value QueryRows::GetValue(idx_t column, idx_t row) const {
+	return rows->GetValue(column, row);
+}
+
+idx_t QueryRows::RowCount() const {
+	return collection->Count();
+}
+
 static thread_local bool inner = false;
 
 InnerScope::InnerScope() : previous(inner) {
@@ -19,24 +31,22 @@ bool InInnerQuery() {
 	return inner;
 }
 
-unique_ptr<MaterializedQueryResult> InnerQuery(ClientContext &context, const string &sql) {
+unique_ptr<QueryRows> InnerQuery(ClientContext &context, const string &sql) {
 	if (inner) {
 		return nullptr;
 	}
 
 	InnerScope scope;
-	unique_ptr<MaterializedQueryResult> result;
 	try {
 		Connection con(*context.db);
-		result = con.Query(sql);
+		auto result = con.Query(sql);
+		if (result->HasError()) {
+			return nullptr;
+		}
+		return make_uniq<QueryRows>(*result);
 	} catch (std::exception &) {
-		result = nullptr;
-	}
-
-	if (!result || result->HasError()) {
 		return nullptr;
 	}
-	return result;
 }
 
 } // namespace duckdb

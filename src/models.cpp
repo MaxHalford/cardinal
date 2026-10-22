@@ -29,6 +29,7 @@
 #include "keys.hpp"
 #include "model_store.hpp"
 
+#include "duckdb/catalog/catalog.hpp"
 #include "duckdb/main/connection.hpp"
 #include "duckdb/main/database.hpp"
 #include "duckdb/storage/data_table.hpp"
@@ -69,7 +70,8 @@ struct CachedModel : public ObjectCacheEntry {
 
 //! e.g. "cardinal:imdb.main.title"
 static string Key(TableCatalogEntry &table) {
-	return "cardinal:" + table.ParentCatalog().GetName() + "." + table.ParentSchema().name + "." + table.name;
+	return "cardinal:" + table.ParentCatalog().GetName().GetIdentifierName() + "." +
+	       table.ParentSchema().name.GetIdentifierName() + "." + table.name.GetIdentifierName();
 }
 
 //! The table's rows now. Invalid for tables DuckDB does not store.
@@ -93,7 +95,7 @@ vector<FitFanout> KnownFanouts(ClientContext &context, TableCatalogEntry &table)
 
 static bool Covers(const Model &model, const vector<string> &columns, const vector<FitFanout> &fanouts) {
 	for (auto &fanout : fanouts) {
-		if (!model.Find(FanoutName(fanout.fk_table.get().name, fanout.fk_column)).IsValid()) {
+		if (!model.Find(FanoutName(fanout.fk_table.get().name.GetIdentifierName(), fanout.fk_column)).IsValid()) {
 			return false;
 		}
 	}
@@ -267,7 +269,7 @@ shared_ptr<Model> GetModel(ClientContext &context, TableCatalogEntry &table) {
 			// Its columns are columns queries filtered on when it was fitted.
 			vector<string> stored_columns;
 			for (auto &column : stored->Columns()) {
-				if (table.GetColumns().ColumnExists(column.name)) {
+				if (table.GetColumns().ColumnExists(Identifier(column.name))) {
 					stored_columns.push_back(column.name);
 				}
 			}

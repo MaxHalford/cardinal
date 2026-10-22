@@ -26,9 +26,12 @@
 #include "duckdb/planner/expression/bound_comparison_expression.hpp"
 #include "duckdb/planner/expression/bound_conjunction_expression.hpp"
 #include "duckdb/planner/expression/bound_constant_expression.hpp"
+#include "duckdb/planner/expression/bound_function_expression.hpp"
 #include "duckdb/planner/expression/bound_operator_expression.hpp"
 #include "duckdb/planner/expression/bound_reference_expression.hpp"
 #include "duckdb/planner/expression_iterator.hpp"
+#include "duckdb/planner/filter/expression_filter.hpp"
+#include "duckdb/planner/filter/table_filter_functions.hpp"
 #include "duckdb/planner/table_filter.hpp"
 
 namespace duckdb {
@@ -53,17 +56,17 @@ static unique_ptr<Expression> Normalize(const Expression &expr, LogicalGet &get,
 	ExpressionIterator::VisitExpressionMutable<BoundColumnRefExpression>(
 	    copy, [&](BoundColumnRefExpression &ref, unique_ptr<Expression> &slot) {
 		    auto &ids = get.GetColumnIds();
-		    if (ref.binding.table_index != get.table_index || ref.binding.column_index >= ids.size()) {
+		    if (ref.Binding().table_index != get.table_index || ref.Binding().column_index >= ids.size()) {
 			    ok = false;
 			    return;
 		    }
-		    auto primary = ids[ref.binding.column_index].GetPrimaryIndex();
-		    auto column = primary < get.names.size() ? model.Find(get.names[primary]) : optional_idx();
+		    auto primary = ids[ref.Binding().column_index].GetPrimaryIndex();
+		    auto column = primary < get.names.size() ? model.Find(get.names[primary].GetIdentifierName()) : optional_idx();
 		    if (!column.IsValid()) {
 			    ok = false;
 			    return;
 		    }
-		    slot = make_uniq<BoundReferenceExpression>(ref.return_type, column.GetIndex());
+		    slot = make_uniq<BoundReferenceExpression>(ref.GetReturnType(), column.GetIndex());
 	    });
 	return ok ? std::move(copy) : nullptr;
 }
@@ -71,7 +74,7 @@ static unique_ptr<Expression> Normalize(const Expression &expr, LogicalGet &get,
 static set<idx_t> Columns(const Expression &expr) {
 	set<idx_t> columns;
 	ExpressionIterator::VisitExpression<BoundReferenceExpression>(
-	    expr, [&](const BoundReferenceExpression &ref) { columns.insert(ref.index); });
+	    expr, [&](const BoundReferenceExpression &ref) { columns.insert(ref.Index()); });
 	return columns;
 }
 
@@ -105,7 +108,7 @@ static bool DNF(const Expression &expr, vector<Term> &result) {
 	auto &conjunction = expr.Cast<BoundConjunctionExpression>();
 	bool is_and = expr.GetExpressionType() == ExpressionType::CONJUNCTION_AND;
 	result = is_and ? vector<Term> {Term()} : vector<Term>();
-	for (auto &child : conjunction.children) {
+	for (auto &child : conjunction.GetChildren()) {
 		vector<Term> terms;
 		if (!DNF(*child, terms)) {
 			return false;
@@ -126,8 +129,8 @@ static vector<bool> Evaluate(ClientContext &context, const Expression &pred, con
 	bool same_type = true;
 	ExpressionIterator::VisitExpressionMutable<BoundReferenceExpression>(
 	    copy, [&](BoundReferenceExpression &ref, unique_ptr<Expression> &) {
-		    ref.index = 0;
-		    same_type = same_type && (chunks.empty() || ref.return_type == chunks[0]->data[0].GetType());
+		    ref.IndexMutable() = 0;
+		    same_type = same_type && (chunks.empty() || ref.GetReturnType() == chunks[0]->data[0].GetType());
 	    });
 	if (!same_type) {
 		throw InvalidInputException("cardinal: a filter reads its column as another type");
@@ -161,21 +164,23 @@ static bool IsColumnConstant(const Expression &column, const Expression &constan
 static bool PointValues(const Expression &pred, idx_t &values, bool &negated) {
 	set<string> distinct;
 	auto add = [&](const Expression &constant) {
-		auto &value = constant.Cast<BoundConstantExpression>().value;
+		auto &value = constant.Cast<BoundConstantExpression>().GetValue();
 		if (!value.IsNull()) {
 			distinct.insert(value.ToString());
 		}
 	};
 	auto type = pred.GetExpressionType();
-	if (pred.GetExpressionClass() == ExpressionClass::BOUND_COMPARISON) {
+	if (BoundComparisonExpression::IsComparison(pred)) {
 		if (type != ExpressionType::COMPARE_EQUAL && type != ExpressionType::COMPARE_NOTEQUAL) {
 			return false;
 		}
-		auto &comparison = pred.Cast<BoundComparisonExpression>();
-		if (IsColumnConstant(*comparison.left, *comparison.right)) {
-			add(*comparison.right);
-		} else if (IsColumnConstant(*comparison.right, *comparison.left)) {
-			add(*comparison.left);
+		auto &comparison = pred.Cast<BoundFunctionExpression>();
+		auto &left = BoundComparisonExpression::Left(comparison);
+		auto &right = BoundComparisonExpression::Right(comparison);
+		if (IsColumnConstant(left, right)) {
+			add(right);
+		} else if (IsColumnConstant(right, left)) {
+			add(left);
 		} else {
 			return false;
 		}
@@ -186,11 +191,11 @@ static bool PointValues(const Expression &pred, idx_t &values, bool &negated) {
 	if (pred.GetExpressionClass() != ExpressionClass::BOUND_OPERATOR) {
 		return false;
 	}
-	auto &op = pred.Cast<BoundOperatorExpression>();
+	auto &children = pred.Cast<BoundOperatorExpression>().GetChildren();
 	if (type == ExpressionType::OPERATOR_NOT) {
-		auto child = op.children[0]->GetExpressionType();
+		auto child = children[0]->GetExpressionType();
 		if ((child != ExpressionType::COMPARE_EQUAL && child != ExpressionType::COMPARE_IN) ||
-		    !PointValues(*op.children[0], values, negated)) {
+		    !PointValues(*children[0], values, negated)) {
 			return false;
 		}
 		negated = !negated;
@@ -199,11 +204,11 @@ static bool PointValues(const Expression &pred, idx_t &values, bool &negated) {
 	if (type != ExpressionType::COMPARE_IN && type != ExpressionType::COMPARE_NOT_IN) {
 		return false;
 	}
-	for (idx_t i = 1; i < op.children.size(); i++) {
-		if (!IsColumnConstant(*op.children[0], *op.children[i])) {
+	for (idx_t i = 1; i < children.size(); i++) {
+		if (!IsColumnConstant(*children[0], *children[i])) {
 			return false;
 		}
-		add(*op.children[i]);
+		add(*children[i]);
 	}
 	negated = type == ExpressionType::COMPARE_NOT_IN;
 	values = distinct.size();
@@ -310,14 +315,33 @@ static double UnionExpectation(ClientContext &context, const Model &model, const
 
 //! Filters that change results: hints and runtime filters do not.
 static bool Counts(const TableFilter &filter) {
-	switch (filter.filter_type) {
-	case TableFilterType::OPTIONAL_FILTER:
-	case TableFilterType::DYNAMIC_FILTER:
-	case TableFilterType::BLOOM_FILTER:
-		return false;
-	default:
-		return true;
+	return !ExpressionFilter::IsOptionalFilter(filter);
+}
+
+//! The filter without its optional parts, e.g. x > 5 AND optional(...) -> x > 5.
+//! Null when internal filter functions remain: those cannot run on model states.
+static unique_ptr<Expression> Strip(const Expression &expr) {
+	if (ExpressionFilter::IsOptionalExpression(expr)) {
+		return nullptr;
 	}
+	auto copy = expr.Copy();
+	if (expr.GetExpressionType() == ExpressionType::CONJUNCTION_AND) {
+		auto &children = copy->Cast<BoundConjunctionExpression>().GetChildrenMutable();
+		vector<unique_ptr<Expression>> kept;
+		for (auto &child : children) {
+			if (!ExpressionFilter::IsOptionalExpression(*child)) {
+				kept.push_back(std::move(child));
+			}
+		}
+		children = std::move(kept);
+	}
+
+	bool internal = false;
+	ExpressionIterator::VisitExpression<BoundFunctionExpression>(*copy, [&](const BoundFunctionExpression &func) {
+		internal = internal || TableFilterFunctions::IsTableFilterFunction(func.Function()) ||
+		           ExpressionFilter::GetOptionalFilterChild(func);
+	});
+	return internal ? nullptr : std::move(copy);
 }
 
 bool PrepareFilters(LogicalGet &get, const vector<unique_ptr<Expression>> &filters, const Model &model,
@@ -325,23 +349,31 @@ bool PrepareFilters(LogicalGet &get, const vector<unique_ptr<Expression>> &filte
 	// The table's types, by model column. Fanout columns are never filtered.
 	out.types.assign(model.Columns().size(), LogicalType::DOUBLE);
 	for (idx_t i = 0; i < get.names.size(); i++) {
-		auto column = model.Find(get.names[i]);
+		auto column = model.Find(get.names[i].GetIdentifierName());
 		if (column.IsValid()) {
 			out.types[column.GetIndex()] = get.returned_types[i];
 		}
 	}
 
 	out.filters.clear();
-	for (auto &entry : get.table_filters.filters) {
-		if (!Counts(*entry.second)) {
+	if (get.table_filters.HasMultiColumnFilters()) {
+		return false;
+	}
+	for (auto &entry : get.table_filters) {
+		if (!Counts(entry.Filter())) {
 			continue;
 		}
-		auto column = model.Find(get.names[entry.first]);
+		auto primary = get.GetColumnIndex(entry.GetIndex()).GetPrimaryIndex();
+		auto column = model.Find(get.names[primary].GetIdentifierName());
 		if (!column.IsValid()) {
 			return false;
 		}
-		BoundReferenceExpression ref(get.returned_types[entry.first], column.GetIndex());
-		out.filters.push_back(entry.second->ToExpression(ref));
+		BoundReferenceExpression ref(get.returned_types[primary], column.GetIndex());
+		auto expr = Strip(*entry.Filter().ToExpression(ref));
+		if (!expr) {
+			return false;
+		}
+		out.filters.push_back(std::move(expr));
 	}
 	for (auto &expr : filters) {
 		auto copy = Normalize(*expr, get, model);
@@ -403,20 +435,21 @@ vector<string> FilteredColumns(LogicalGet &get, const vector<unique_ptr<Expressi
 	auto supported = [&](idx_t column) {
 		return column < get.names.size() && SupportedType(get.returned_types[column]);
 	};
-	for (auto &entry : get.table_filters.filters) {
-		if (Counts(*entry.second) && supported(entry.first)) {
-			names.insert(get.names[entry.first]);
+	for (auto &entry : get.table_filters) {
+		auto primary = get.GetColumnIndex(entry.GetIndex()).GetPrimaryIndex();
+		if (Counts(entry.Filter()) && supported(primary)) {
+			names.insert(get.names[primary].GetIdentifierName());
 		}
 	}
 	auto &ids = get.GetColumnIds();
 	for (auto &expr : filters) {
 		ExpressionIterator::VisitExpression<BoundColumnRefExpression>(*expr, [&](const BoundColumnRefExpression &ref) {
-			if (ref.binding.table_index != get.table_index || ref.binding.column_index >= ids.size()) {
+			if (ref.Binding().table_index != get.table_index || ref.Binding().column_index >= ids.size()) {
 				return;
 			}
-			auto primary = ids[ref.binding.column_index].GetPrimaryIndex();
+			auto primary = ids[ref.Binding().column_index].GetPrimaryIndex();
 			if (supported(primary)) {
-				names.insert(get.names[primary]);
+				names.insert(get.names[primary].GetIdentifierName());
 			}
 		});
 	}
