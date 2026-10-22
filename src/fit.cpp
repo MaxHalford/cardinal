@@ -60,10 +60,11 @@ struct Hashes {
 	vector<bool> null;
 };
 
-//! A distinct value of a sampled column.
+//! A distinct value of a sampled column: its rows, and their weight.
 struct Distinct {
 	uint64_t hash;
 	idx_t count;
+	double weight;
 };
 
 //! Pass 1: hash every sampled value.
@@ -86,41 +87,48 @@ static vector<Hashes> HashColumns(ColumnDataCollection &sample, idx_t count) {
 	return columns;
 }
 
-//! Distinct non-null values, most frequent first. Ties go by hash: a
-//! deterministic sample. e.g. unique timestamps: the kept ones spread over
-//! the whole range, so the OTHER share of a range filter follows the range.
-static vector<Distinct> Rank(const Hashes &column) {
-	vector<uint64_t> sorted;
+//! Distinct non-null values, heaviest first: a row weighs 1 plus the rows that join to it.
+//! e.g. each keyword is one row of keyword, but 'sequel' joins thousands of movie_keyword
+//! rows: it is kept, as join estimates need. Ties go by hash: a deterministic sample. e.g.
+//! unique timestamps: the kept ones spread over the whole range, so the OTHER share of a
+//! range filter follows the range.
+static vector<Distinct> Rank(const Hashes &column, const vector<double> &weights) {
+	vector<pair<uint64_t, double>> sorted;
 	for (idx_t r = 0; r < column.hash.size(); r++) {
 		if (!column.null[r]) {
-			sorted.push_back(column.hash[r]);
+			sorted.emplace_back(column.hash[r], weights[r]);
 		}
 	}
 	std::sort(sorted.begin(), sorted.end());
 
 	vector<Distinct> distinct;
-	for (idx_t i = 0; i < sorted.size(); i++) {
-		if (distinct.empty() || distinct.back().hash != sorted[i]) {
-			distinct.push_back({sorted[i], 0});
+	for (auto &entry : sorted) {
+		if (distinct.empty() || distinct.back().hash != entry.first) {
+			distinct.push_back({entry.first, 0, 0});
 		}
 		distinct.back().count++;
+		distinct.back().weight += entry.second;
 	}
 	std::stable_sort(distinct.begin(), distinct.end(),
-	                 [](const Distinct &a, const Distinct &b) { return a.count > b.count; });
+	                 [](const Distinct &a, const Distinct &b) { return a.weight > b.weight; });
 	return distinct;
 }
 
 //! How many of the ranked values a compacted column keeps.
-static idx_t KeptCount(const vector<Distinct> &ranked, idx_t non_null, const FitOptions &options) {
+static idx_t KeptCount(const vector<Distinct> &ranked, const FitOptions &options) {
 	auto limit = MinValue<idx_t>(ranked.size(), options.max_categories > 0 ? options.max_categories - 1 : 0);
+	double weight = 0;
+	for (auto &distinct : ranked) {
+		weight += distinct.weight;
+	}
 
-	// Include the value that brings the cumulative share to the coverage.
+	// Include the value that brings the cumulative share of the weight to the coverage.
 	double total = 0;
 	for (idx_t i = 0; i < limit; i++) {
-		if (total / double(non_null) >= options.coverage) {
+		if (total / weight >= options.coverage) {
 			return i;
 		}
-		total += double(ranked[i].count);
+		total += ranked[i].weight;
 	}
 	return limit;
 }
@@ -131,7 +139,7 @@ static ModelColumn States(const FitColumn &fit, const LogicalType &type, const v
 	// The whole table may have more distinct values than the sample.
 	auto distinct = MaxValue<idx_t>(fit.distinct.IsValid() ? fit.distinct.GetIndex() : 0, ranked.size());
 	bool compact = distinct > MAX_STATES;
-	auto kept = compact ? KeptCount(ranked, non_null, options) : ranked.size();
+	auto kept = compact ? KeptCount(ranked, options) : ranked.size();
 
 	ModelColumn col;
 	col.name = fit.name;
@@ -411,12 +419,30 @@ shared_ptr<Model> FitModel(Connection &con, TableCatalogEntry &table, const vect
 		throw InvalidInputException("cardinal: %s is empty", table.name);
 	}
 
-	// 2. States.
+	// 2. States. A row weighs 1 plus the rows that join to it.
+	vector<vector<int64_t>> fanout_counts(fanouts.size());
+	for (idx_t i = 0; i < fanouts.size(); i++) {
+		for (auto &chunk : sample.Chunks()) {
+			UnifiedVectorFormat format;
+			chunk.data[fits.size() + i].ToUnifiedFormat(chunk.size(), format);
+			auto data = UnifiedVectorFormat::GetData<int64_t>(format);
+			for (idx_t r = 0; r < chunk.size(); r++) {
+				fanout_counts[i].push_back(data[format.sel->get_index(r)]);
+			}
+		}
+	}
+	vector<double> weights(sample_rows, 1.0);
+	for (auto &counts : fanout_counts) {
+		for (idx_t r = 0; r < sample_rows; r++) {
+			weights[r] += double(counts[r]);
+		}
+	}
+
 	auto hashes = HashColumns(sample, fits.size());
 	vector<vector<Distinct>> ranked;
 	vector<ModelColumn> columns;
 	for (idx_t i = 0; i < fits.size(); i++) {
-		ranked.push_back(Rank(hashes[i]));
+		ranked.push_back(Rank(hashes[i], weights));
 		idx_t non_null = 0;
 		for (auto &distinct : ranked.back()) {
 			non_null += distinct.count;
@@ -428,18 +454,9 @@ shared_ptr<Model> FitModel(Connection &con, TableCatalogEntry &table, const vect
 	auto codes = Encode(sample, hashes, ranked, columns);
 	hashes.clear();
 	for (idx_t i = 0; i < fanouts.size(); i++) {
-		vector<int64_t> counts;
-		for (auto &chunk : sample.Chunks()) {
-			UnifiedVectorFormat format;
-			chunk.data[fits.size() + i].ToUnifiedFormat(chunk.size(), format);
-			auto data = UnifiedVectorFormat::GetData<int64_t>(format);
-			for (idx_t r = 0; r < chunk.size(); r++) {
-				counts.push_back(data[format.sel->get_index(r)]);
-			}
-		}
 		codes.emplace_back();
-		columns.push_back(
-		    BinFanout(FanoutName(fanouts[i].fk_table.get().name.GetIdentifierName(), fanouts[i].fk_column), counts, codes.back()));
+		columns.push_back(BinFanout(FanoutName(fanouts[i].fk_table.get().name.GetIdentifierName(), fanouts[i].fk_column),
+		                            fanout_counts[i], codes.back()));
 	}
 	result.reset();
 
