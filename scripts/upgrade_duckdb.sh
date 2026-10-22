@@ -40,7 +40,7 @@ git -C extension-ci-tools checkout -q FETCH_HEAD
 
 # Version pins: CI, the gate, the research tools, the submodule branch.
 version=${target#v}
-sed -i.bak "s/duckdb_version: $current/duckdb_version: $target/; s/ci_tools_version: .*/ci_tools_version: $tools/; s|_extension_distribution.yml@.*|_extension_distribution.yml@$tools|" \
+sed -i.bak "s/duckdb_version: $current/duckdb_version: $target/; s/ci_tools_version: .*/ci_tools_version: $tools/; s|\(_extension_[a-z_]*.yml\)@.*|\1@$tools|" \
     .github/workflows/MainDistributionPipeline.yml
 sed -i.bak "s/duckdb==[0-9.]*/duckdb==$version/" scripts/gate.py research/pyproject.toml
 sed -i.bak "s/branch = .*/branch = $tools/" .gitmodules

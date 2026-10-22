@@ -1,0 +1,28 @@
+#
+# Formats the sources with DuckDB's pinned clang-format, which only ships for x86 Linux.
+# The result is a patch to apply locally: git apply format.patch
+#
+name: Format
+on:
+  workflow_dispatch:
+
+jobs:
+  format:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - name: Tools
+        run: pip3 install --break-system-packages 'clang_format==11.0.1' cmake-format 'black==24.*'
+
+      - name: Format
+        run: |
+          make format-fix
+          git diff -- src test > format.patch
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: format
+          path: format.patch

@@ -22,3 +22,13 @@ jobs:
       extension_name: cardinal
       # Fitting runs on worker threads: wasm builds lack them.
       exclude_archs: 'wasm_mvp;wasm_eh;wasm_threads'
+
+  # DuckDB's formatting (clang-format 11) and static analysis (clang-tidy) rules.
+  code-quality-check:
+    name: Code Quality Check
+    uses: duckdb/extension-ci-tools/.github/workflows/_extension_code_quality.yml@v2.0-cyanoptera
+    with:
+      duckdb_version: v2.0.0
+      ci_tools_version: v2.0-cyanoptera
+      extension_name: cardinal
+      format_checks: 'format;tidy'
