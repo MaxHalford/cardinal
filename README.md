@@ -15,7 +15,6 @@ It has five parts:
 - `plans.py`, which injects estimates into DuckDB and scores the chosen plans with true cardinalities (P-error).
 - `cardinal`, a DuckDB extension (`src/`) that gives the optimizer Bayesian-network estimates of base tables, without patching DuckDB.
 
-Notes are in `notes/`.
 
 <br clear="right"/>
 
