@@ -24,11 +24,7 @@ void AttachScanHooks(LogicalOperator &op);
 //! Join targets of the current optimizer run: row and distinct counts the hooks report.
 void SetJoinTargets(JoinTargets targets);
 
-//! Start a run on a copy of a plan, after filter pushdown: the scans report the targets.
-//! e.g. to see the join order DuckDB picks with them. End it with DetachScanHooks.
-void AttachTargets(ClientContext &context, LogicalOperator &plan, const JoinTargets &targets);
-
-//! End the optimizer run started by the last AttachScanHooks or AttachTargets.
+//! End the optimizer run started by the last AttachScanHooks.
 void DetachScanHooks();
 
 } // namespace cardinal

@@ -267,43 +267,6 @@ void AttachScanHooks(LogicalOperator &op) {
 	AttachHooks(op);
 }
 
-//! Hooks on the scans of an analyzed copy: each scan's base row count is its target over
-//! DuckDB's filter factor, given the filters left above it.
-static void AttachTargetHooks(ClientContext &context, LogicalOperator &op,
-                              const vector<unique_ptr<Expression>> *above) {
-	if (op.type == LogicalOperatorType::LOGICAL_FILTER && op.children[0]->type == LogicalOperatorType::LOGICAL_GET) {
-		AttachTargetHooks(context, *op.children[0], &op.expressions);
-		return;
-	}
-	for (auto &child : op.children) {
-		AttachTargetHooks(context, *child, nullptr);
-	}
-	if (op.type != LogicalOperatorType::LOGICAL_GET) {
-		return;
-	}
-	auto &get = op.Cast<LogicalGet>();
-	if (!get.GetTable() || !get.bind_data) {
-		return;
-	}
-	AttachHooks(op);
-	auto &frame = frames.back();
-	auto target = frame.targets.rows.find(get.table_index);
-	if (target == frame.targets.rows.end()) {
-		return;
-	}
-	vector<unique_ptr<Expression>> none;
-	auto factor = FilterFactor(context, get, above ? *above : none);
-	if (factor > 0) {
-		frame.rows[get.bind_data.get()] = MaxValue<idx_t>(idx_t(std::round(target->second / factor)), 1);
-	}
-}
-
-void AttachTargets(ClientContext &context, LogicalOperator &plan, const JoinTargets &targets) {
-	frames.emplace_back();
-	frames.back().targets = targets;
-	AttachTargetHooks(context, plan, nullptr);
-}
-
 void SetJoinTargets(JoinTargets targets) {
 	if (!frames.empty()) {
 		frames.back().targets = std::move(targets);

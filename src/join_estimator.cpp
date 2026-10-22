@@ -57,18 +57,6 @@ static bool IsTree(uint64_t set, idx_t relation_count, idx_t links, idx_t class_
 }
 
 bool JoinEstimator::Estimate(uint64_t set, double &card) {
-	// The fit and the guard ask for the same sets.
-	auto hit = estimates.find(set);
-	if (hit == estimates.end()) {
-		double result = 0;
-		auto ok = EstimateSet(set, result);
-		hit = estimates.emplace(set, make_pair(ok, result)).first;
-	}
-	card = hit->second.second;
-	return hit->second.first;
-}
-
-bool JoinEstimator::EstimateSet(uint64_t set, double &card) {
 	// The classes of the set: graph classes with at least two members in it.
 	classes.clear();
 	domain_of.clear();

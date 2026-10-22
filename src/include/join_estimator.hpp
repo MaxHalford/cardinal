@@ -72,7 +72,6 @@ public:
 	bool Estimate(uint64_t set, double &card);
 
 private:
-	bool EstimateSet(uint64_t set, double &card);
 
 	//! A class restricted to the set: domain relation, if in the set, and foreign keys.
 	struct Class {
@@ -128,8 +127,6 @@ private:
 	RelationFilters BuildFilters(idx_t r, const vector<const Class *> &folds, const vector<const Class *> &fks);
 	//! Built filters, shared by sets, e.g. "2|f3,|k3,5,".
 	map<string, RelationFilters> relation_filters;
-	//! Estimates by set: whether estimable, and rows.
-	unordered_map<uint64_t, pair<bool, double>> estimates;
 };
 
 } // namespace cardinal

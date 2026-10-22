@@ -8,7 +8,6 @@
 
 #include "scan_hook.hpp"
 
-#include "duckdb/optimizer/join_order/join_order_optimizer.hpp"
 #include "duckdb/storage/data_table.hpp"
 
 namespace duckdb {
@@ -22,10 +21,6 @@ static constexpr idx_t MAX_DIMENSION_ROWS = 10000;
 
 //! Pull of the fit towards the starting values: only breaks ties between solutions.
 static constexpr double RIDGE = 1e-6;
-
-//! Share cardinal's plan must be believed cheaper by, to replace DuckDB's. Below it, the
-//! difference is within the errors of the estimates: DuckDB keeps its plan.
-static constexpr double MARGIN = 0.05;
 
 //! Fits with the edge order of the previous solution.
 static constexpr idx_t FIT_ROUNDS = 2;
@@ -259,53 +254,6 @@ static vector<double> RidgeSolve(const vector<vector<double>> &X, const vector<d
 	return theta;
 }
 
-//! The relations under op, and the relation set of each join in it.
-static uint64_t JoinSets(LogicalOperator &op, const unordered_map<TableIndex, idx_t> &relation_of, vector<uint64_t> &joins) {
-	uint64_t set = 0;
-	for (auto &child : op.children) {
-		set |= JoinSets(*child, relation_of, joins);
-	}
-	if (op.type == LogicalOperatorType::LOGICAL_GET) {
-		auto hit = relation_of.find(op.Cast<LogicalGet>().table_index);
-		if (hit != relation_of.end()) {
-			set |= uint64_t(1) << hit->second;
-		}
-	}
-	bool join = op.type == LogicalOperatorType::LOGICAL_COMPARISON_JOIN ||
-	            op.type == LogicalOperatorType::LOGICAL_CROSS_PRODUCT || op.type == LogicalOperatorType::LOGICAL_ANY_JOIN;
-	if (join && __builtin_popcountll(set) > 1) {
-		joins.push_back(set);
-	}
-	return set;
-}
-
-//! The joins of the order DuckDB picks for the analyzed plan, with the targets or without.
-static vector<uint64_t> DuckDBJoins(ClientContext &context, const QueryGraph &graph, optional_ptr<JoinTargets> targets) {
-	unordered_map<TableIndex, idx_t> relation_of;
-	for (idx_t r = 0; r < graph.relations.size(); r++) {
-		relation_of[graph.relations[r].get.get().table_index] = r;
-	}
-	auto copy = graph.plan->Copy(context);
-	if (targets) {
-		AttachTargets(context, *copy, *targets);
-	}
-	try {
-		JoinOrderOptimizer optimizer(context);
-		copy = optimizer.Optimize(std::move(copy));
-	} catch (std::exception &) {
-		if (targets) {
-			DetachScanHooks();
-		}
-		throw;
-	}
-	if (targets) {
-		DetachScanHooks();
-	}
-	vector<uint64_t> joins;
-	JoinSets(*copy, relation_of, joins);
-	return joins;
-}
-
 //! Targets that leave the query to DuckDB.
 static JoinTargets HandsOff() {
 	JoinTargets targets;
@@ -416,47 +364,7 @@ JoinTargets PlanJoins(ClientContext &context, Optimizer &optimizer, LogicalOpera
 		}
 	}
 
-	// Do no harm: keep the targets only if DuckDB's plan with them is believed cheaper, by
-	// cardinal's own estimates, than DuckDB's plan without them. Belief: the fanout estimate,
-	// else the fitted formula. Cost: the sum of intermediate join sizes, as DuckDB's.
-	vector<double> d(theta.begin() + count, theta.end());
-	auto order = EdgeOrder(graph, d);
-	auto belief = [&](uint64_t set) {
-		double card;
-		if (estimator.Estimate(set, card)) {
-			return MaxValue(card, 1.0);
-		}
-		vector<double> x;
-		double offset;
-		FormulaRow(graph, set, d, order, x, offset);
-		for (idx_t i = 0; i < x.size(); i++) {
-			offset += x[i] * theta[i];
-		}
-		return std::exp(offset);
-	};
-	// Intermediate joins only: each tree's root, the result, is the same for every plan.
-	auto cost = [&](const vector<uint64_t> &joins) {
-		double total = 0;
-		for (auto set : joins) {
-			bool inner = false;
-			for (auto other : joins) {
-				inner = inner || (other != set && (other & set) == set);
-			}
-			if (inner) {
-				total += belief(set);
-			}
-		}
-		return total;
-	};
-	try {
-		auto own = cost(DuckDBJoins(context, graph, nullptr));
-		auto ours = cost(DuckDBJoins(context, graph, &targets));
-		if (ours < (1 - MARGIN) * own) {
-			return targets;
-		}
-	} catch (std::exception &) {
-	}
-	return HandsOff();
+	return targets;
 }
 
 } // namespace cardinal

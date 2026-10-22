@@ -16,7 +16,7 @@ When DuckDB plans a query, cardinal:
 2. **Fits a model** per table it needs, if it has none yet: a Bayesian network over the columns filters read, plus, for each foreign key that points to the table, how many rows point to each of its rows. Fitting reads a sample of at most one million rows. It takes milliseconds for small tables, around a second for large ones, and happens once: the query that needs the model waits for it.
 3. **Estimates** the query's filters and joins with the models, and gives DuckDB the row and distinct counts that make DuckDB's own formulas reproduce those estimates. DuckDB then plans as usual.
 
-Cardinal never makes a plan worse by its own reckoning: it compares the plan DuckDB picks with its numbers and without them, and keeps its numbers only if their plan looks at least 5% cheaper. Otherwise, and for anything it can't estimate, the query is planned by DuckDB alone. Query results never change, only plans; if anything goes wrong inside cardinal, DuckDB plans without it.
+For anything cardinal can't estimate, e.g. a join without a known primary key, the query is planned by DuckDB alone. Query results never change, only plans; if anything goes wrong inside cardinal, DuckDB plans without it.
 
 ## On by default, or opt in
 
