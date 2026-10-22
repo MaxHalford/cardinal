@@ -57,6 +57,18 @@ static bool IsTree(uint64_t set, idx_t relation_count, idx_t links, idx_t class_
 }
 
 bool JoinEstimator::Estimate(uint64_t set, double &card) {
+	// The fit and the guard ask for the same sets.
+	auto hit = estimates.find(set);
+	if (hit == estimates.end()) {
+		double result = 0;
+		auto ok = EstimateSet(set, result);
+		hit = estimates.emplace(set, make_pair(ok, result)).first;
+	}
+	card = hit->second.second;
+	return hit->second.first;
+}
+
+bool JoinEstimator::EstimateSet(uint64_t set, double &card) {
 	// The classes of the set: graph classes with at least two members in it.
 	classes.clear();
 	domain_of.clear();
@@ -110,8 +122,8 @@ bool JoinEstimator::Estimate(uint64_t set, double &card) {
 
 	// Fold small filtered dimensions that join only their foreign key in the set.
 	folded.clear();
-	folded_filters.clear();
 	duckdb::set<idx_t> dimensions;
+	map<idx_t, vector<const Class *>> folds;
 	for (auto &c : classes) {
 		auto &domain = domains[c.id];
 		if (!domain.folds || !c.d.IsValid() || c.fks.size() != 1 || !fk_of[c.d.GetIndex()].empty()) {
@@ -119,81 +131,54 @@ bool JoinEstimator::Estimate(uint64_t set, double &card) {
 		}
 		auto r = c.fks.begin()->first;
 		auto &relation = relations[r];
-		auto column = relation.model ? relation.model->Find(c.fks.begin()->second) : optional_idx();
-		if (!column.IsValid()) {
+		if (!relation.model || !relation.model->Find(c.fks.begin()->second).IsValid()) {
 			continue;
 		}
-
-		// R.fk IN (keys), on R's model.
-		auto &filters = folded_filters[r];
-		if (filters.types.empty()) {
-			filters.types = relation.filters.types;
-			if (filters.types.empty()) {
-				filters.types.assign(relation.model->Columns().size(), LogicalType::DOUBLE);
-			}
-			for (auto &expr : relation.filters.filters) {
-				filters.filters.push_back(expr->Copy());
-			}
-			filters.key = relation.filters.key;
-		}
-		auto &type = relation.model->Columns()[column.GetIndex()].type;
-		auto in = make_uniq<BoundOperatorExpression>(ExpressionType::COMPARE_IN, LogicalType::BOOLEAN);
-		in->GetChildrenMutable().push_back(make_uniq<BoundReferenceExpression>(type, column.GetIndex()));
-		string keys;
-		for (auto &key : domain.keys) {
-			Value value = key;
-			if (!value.DefaultTryCastAs(type)) {
-				continue;
-			}
-			keys += value.ToString() + ",";
-			in->GetChildrenMutable().push_back(make_uniq<BoundConstantExpression>(value));
-		}
-		if (in->GetChildren().size() == 1) {
-			// No key passes: no row of R joins.
-			card = 0;
-			return true;
-		}
-		filters.key += " AND #" + to_string(column.GetIndex()) + " IN (" + keys + ")";
-		filters.filters.push_back(std::move(in));
+		folds[r].push_back(&c);
 		folded.insert(c.id);
 		dimensions.insert(c.d.GetIndex());
 	}
 
-	// Foreign keys not NULL: on each relation's model, with its filters and alone.
+	// Each relation's filters for its folded classes and foreign keys: sets share them.
+	folded_filters.clear();
 	keyed_filters.clear();
 	key_filters.clear();
+	duckdb::set<idx_t> filtered;
+	for (auto &entry : folds) {
+		filtered.insert(entry.first);
+	}
 	for (auto &entry : fk_of) {
-		auto r = entry.first;
-		auto &relation = relations[r];
-		if (!relation.model) {
+		filtered.insert(entry.first);
+	}
+	for (auto r : filtered) {
+		if (!relations[r].model) {
 			continue;
 		}
-		auto &model = *relation.model;
-		auto &with = keyed_filters[r];
-		auto &alone = key_filters[r];
-		auto &base = FiltersOf(r);
-		with.types = base.types.empty() ? vector<LogicalType>(model.Columns().size(), LogicalType::DOUBLE) : base.types;
-		alone.types = with.types;
-		for (auto &expr : base.filters) {
-			with.filters.push_back(expr->Copy());
+		// e.g. "2|f3,|k3,5," for relation 2 with class 3 folded, foreign key in classes 3 and 5.
+		auto key = to_string(r) + "|f";
+		for (auto c : folds[r]) {
+			key += to_string(c->id) + ",";
 		}
-		with.key = base.key;
-		for (auto c : entry.second) {
-			auto column = model.Find(c->fks.at(r));
-			if (!column.IsValid()) {
-				continue;
-			}
-			auto &type = model.Columns()[column.GetIndex()].type;
-			for (auto target : {&with, &alone}) {
-				auto not_null = make_uniq<BoundOperatorExpression>(ExpressionType::OPERATOR_IS_NOT_NULL, LogicalType::BOOLEAN);
-				not_null->GetChildrenMutable().push_back(make_uniq<BoundReferenceExpression>(type, column.GetIndex()));
-				target->filters.push_back(std::move(not_null));
-				target->key += " AND #" + to_string(column.GetIndex()) + " IS NOT NULL";
-			}
+		key += "|k";
+		for (auto c : fk_of[r]) {
+			key += to_string(c->id) + ",";
 		}
-		if (alone.filters.empty()) {
-			keyed_filters.erase(r);
-			key_filters.erase(r);
+		auto hit = relation_filters.find(key);
+		if (hit == relation_filters.end()) {
+			hit = relation_filters.emplace(key, BuildFilters(r, folds[r], fk_of[r])).first;
+		}
+		auto &built = hit->second;
+		if (built.empty) {
+			// A folded dimension passes no key: no row of r joins.
+			card = 0;
+			return true;
+		}
+		if (built.has_folded) {
+			folded_filters[r] = &built.folded;
+		}
+		if (built.has_keys) {
+			keyed_filters[r] = &built.keyed;
+			key_filters[r] = &built.key;
 		}
 	}
 
@@ -208,6 +193,71 @@ bool JoinEstimator::Estimate(uint64_t set, double &card) {
 		return false;
 	}
 	return true;
+}
+
+JoinEstimator::RelationFilters JoinEstimator::BuildFilters(idx_t r, const vector<const Class *> &folds,
+                                                          const vector<const Class *> &fks) {
+	RelationFilters result;
+	auto &relation = relations[r];
+	auto &model = *relation.model;
+	auto types = relation.filters.types;
+	if (types.empty()) {
+		types.assign(model.Columns().size(), LogicalType::DOUBLE);
+	}
+
+	// R.fk IN (keys of each folded dimension), with R's own filters.
+	auto &with_keys = result.folded;
+	with_keys.types = types;
+	for (auto &expr : relation.filters.filters) {
+		with_keys.filters.push_back(expr->Copy());
+	}
+	with_keys.key = relation.filters.key;
+	for (auto c : folds) {
+		auto column = model.Find(c->fks.at(r)).GetIndex();
+		auto &type = model.Columns()[column].type;
+		auto in = make_uniq<BoundOperatorExpression>(ExpressionType::COMPARE_IN, LogicalType::BOOLEAN);
+		in->GetChildrenMutable().push_back(make_uniq<BoundReferenceExpression>(type, column));
+		string keys;
+		for (auto &key : domains[c->id].keys) {
+			Value value = key;
+			if (!value.DefaultTryCastAs(type)) {
+				continue;
+			}
+			keys += value.ToString() + ",";
+			in->GetChildrenMutable().push_back(make_uniq<BoundConstantExpression>(value));
+		}
+		if (in->GetChildren().size() == 1) {
+			result.empty = true;
+			return result;
+		}
+		with_keys.key += " AND #" + to_string(column) + " IN (" + keys + ")";
+		with_keys.filters.push_back(std::move(in));
+	}
+	result.has_folded = !folds.empty();
+	auto &base = result.has_folded ? result.folded : relation.filters;
+
+	// Foreign keys not NULL: with the filters, and alone.
+	result.keyed.types = types;
+	result.key.types = types;
+	for (auto &expr : base.filters) {
+		result.keyed.filters.push_back(expr->Copy());
+	}
+	result.keyed.key = base.key;
+	for (auto c : fks) {
+		auto column = model.Find(c->fks.at(r));
+		if (!column.IsValid()) {
+			continue;
+		}
+		auto &type = model.Columns()[column.GetIndex()].type;
+		for (auto target : {&result.keyed, &result.key}) {
+			auto not_null = make_uniq<BoundOperatorExpression>(ExpressionType::OPERATOR_IS_NOT_NULL, LogicalType::BOOLEAN);
+			not_null->GetChildrenMutable().push_back(make_uniq<BoundReferenceExpression>(type, column.GetIndex()));
+			target->filters.push_back(std::move(not_null));
+			target->key += " AND #" + to_string(column.GetIndex()) + " IS NOT NULL";
+		}
+	}
+	result.has_keys = !result.key.filters.empty();
+	return result;
 }
 
 double JoinEstimator::ExpectOn(const Model *model, const PreparedFilters *filters, const map<string, idx_t> &powers) {
@@ -226,8 +276,8 @@ double JoinEstimator::ExpectOn(const Model *model, const PreparedFilters *filter
 		}
 		columns[column.GetIndex()] = entry.second;
 	}
-	PreparedFilters none;
-	none.types.assign(model->Columns().size(), LogicalType::DOUBLE);
+	// No filters: no predicate reads the types.
+	static const PreparedFilters none;
 	double result;
 	if (!Expect(context, *model, filters ? *filters : none, columns, result)) {
 		throw Unsupported();
@@ -267,16 +317,16 @@ double JoinEstimator::RelationExpect(idx_t r, const map<string, idx_t> &powers) 
 	if (keyed == keyed_filters.end()) {
 		return ExpectOn(relations[r].model.get(), &FiltersOf(r), powers);
 	}
-	auto keys = ExpectOn(relations[r].model.get(), &key_filters[r], {});
+	auto keys = ExpectOn(relations[r].model.get(), key_filters[r], {});
 	if (keys <= 0) {
 		return 0;
 	}
-	return ExpectOn(relations[r].model.get(), &keyed->second, powers) / keys;
+	return ExpectOn(relations[r].model.get(), keyed->second, powers) / keys;
 }
 
 const PreparedFilters &JoinEstimator::FiltersOf(idx_t r) {
 	auto hit = folded_filters.find(r);
-	return hit != folded_filters.end() ? hit->second : relations[r].filters;
+	return hit != folded_filters.end() ? *hit->second : relations[r].filters;
 }
 
 const Model *JoinEstimator::DomainModel(const Class &c) {
@@ -295,11 +345,20 @@ idx_t JoinEstimator::DomainRows(const Class &c) {
 	if (c.d.IsValid()) {
 		return relations[c.d.GetIndex()].rows;
 	}
-	auto table = KeyTable(context, domains[c.id].key);
-	if (!table || !table->IsDuckTable()) {
+	// A table outside the query: looked up once.
+	auto hit = domain_rows.find(c.id);
+	if (hit == domain_rows.end()) {
+		auto table = KeyTable(context, domains[c.id].key);
+		optional_idx rows;
+		if (table && table->IsDuckTable()) {
+			rows = table->GetStorage().GetTotalRows();
+		}
+		hit = domain_rows.emplace(c.id, rows).first;
+	}
+	if (!hit->second.IsValid()) {
 		throw Unsupported();
 	}
-	return table->GetStorage().GetTotalRows();
+	return hit->second.GetIndex();
 }
 
 //! Expected matches through class c per row of r, a foreign key in c.

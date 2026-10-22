@@ -159,9 +159,20 @@ static vector<uint64_t> ConnectedSets(const QueryGraph &graph) {
 	return sets;
 }
 
+//! Edges in the order DuckDB's formula takes them: largest distinct count first.
+static vector<idx_t> EdgeOrder(const QueryGraph &graph, const vector<double> &d) {
+	vector<idx_t> order(graph.edges.size());
+	for (idx_t e = 0; e < order.size(); e++) {
+		order[e] = e;
+	}
+	std::stable_sort(order.begin(), order.end(),
+	                 [&](idx_t a, idx_t b) { return d[graph.edge_class[a]] > d[graph.edge_class[b]]; });
+	return order;
+}
+
 //! DuckDB's formula for a set: coefficients of θ = (log n per relation, log d per class), and offset.
-static void FormulaRow(const QueryGraph &graph, uint64_t members, const vector<double> &d, vector<double> &x,
-                       double &offset) {
+static void FormulaRow(const QueryGraph &graph, uint64_t members, const vector<double> &d, const vector<idx_t> &order,
+                       vector<double> &x, double &offset) {
 	auto count = graph.relations.size();
 	x.assign(count + graph.classes.size(), 0);
 	idx_t components = 0;
@@ -176,13 +187,6 @@ static void FormulaRow(const QueryGraph &graph, uint64_t members, const vector<d
 	std::function<idx_t(idx_t)> find = [&](idx_t v) {
 		return parent[v] == v ? v : find(parent[v]);
 	};
-
-	vector<idx_t> order(graph.edges.size());
-	for (idx_t e = 0; e < order.size(); e++) {
-		order[e] = e;
-	}
-	std::stable_sort(order.begin(), order.end(),
-	                 [&](idx_t a, idx_t b) { return d[graph.edge_class[a]] > d[graph.edge_class[b]]; });
 
 	// Edges after the set is connected: a penalty per distinct count, unless their class
 	// was already used, e.g. a.x = b.x = c.x adds nothing for a.x = c.x.
@@ -391,11 +395,12 @@ JoinTargets PlanJoins(ClientContext &context, Optimizer &optimizer, LogicalOpera
 	auto start = theta;
 	for (idx_t round = 0; round < FIT_ROUNDS; round++) {
 		vector<double> d(theta.begin() + count, theta.end());
+		auto order = EdgeOrder(graph, d);
 		vector<vector<double>> X(sets.size());
 		vector<double> target(sets.size());
 		for (idx_t i = 0; i < sets.size(); i++) {
 			double offset;
-			FormulaRow(graph, sets[i], d, X[i], offset);
+			FormulaRow(graph, sets[i], d, order, X[i], offset);
 			target[i] = y[i] - offset;
 		}
 		theta = RidgeSolve(X, target, start);
@@ -415,6 +420,7 @@ JoinTargets PlanJoins(ClientContext &context, Optimizer &optimizer, LogicalOpera
 	// cardinal's own estimates, than DuckDB's plan without them. Belief: the fanout estimate,
 	// else the fitted formula. Cost: the sum of intermediate join sizes, as DuckDB's.
 	vector<double> d(theta.begin() + count, theta.end());
+	auto order = EdgeOrder(graph, d);
 	auto belief = [&](uint64_t set) {
 		double card;
 		if (estimator.Estimate(set, card)) {
@@ -422,7 +428,7 @@ JoinTargets PlanJoins(ClientContext &context, Optimizer &optimizer, LogicalOpera
 		}
 		vector<double> x;
 		double offset;
-		FormulaRow(graph, set, d, x, offset);
+		FormulaRow(graph, set, d, order, x, offset);
 		for (idx_t i = 0; i < x.size(); i++) {
 			offset += x[i] * theta[i];
 		}

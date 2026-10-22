@@ -72,6 +72,8 @@ public:
 	bool Estimate(uint64_t set, double &card);
 
 private:
+	bool EstimateSet(uint64_t set, double &card);
+
 	//! A class restricted to the set: domain relation, if in the set, and foreign keys.
 	struct Class {
 		idx_t id;
@@ -93,6 +95,8 @@ private:
 	vector<JoinDomain> domains;
 	//! Models of domain tables outside the query.
 	map<idx_t, shared_ptr<Model>> domain_models;
+	//! Rows of domain tables outside the query, by class. Invalid: not a DuckDB table.
+	map<idx_t, optional_idx> domain_rows;
 
 	//! A relation's filters with the keys of the dimensions folded into it, if any.
 	const PreparedFilters &FiltersOf(idx_t r);
@@ -105,11 +109,27 @@ private:
 	map<idx_t, vector<const Class *>> fk_of;
 	//! Folded classes, and the filters of their foreign-key relations.
 	set<idx_t> folded;
-	map<idx_t, PreparedFilters> folded_filters;
+	map<idx_t, const PreparedFilters *> folded_filters;
 	//! Relations with foreign keys in the set: their filters with fk IS NOT NULL, and the
 	//! IS NOT NULL predicates alone.
-	map<idx_t, PreparedFilters> keyed_filters;
-	map<idx_t, PreparedFilters> key_filters;
+	map<idx_t, const PreparedFilters *> keyed_filters;
+	map<idx_t, const PreparedFilters *> key_filters;
+
+	//! A relation's filters for some folded classes and foreign keys.
+	struct RelationFilters {
+		//! A folded dimension passes no key.
+		bool empty = false;
+		bool has_folded = false;
+		PreparedFilters folded;
+		bool has_keys = false;
+		PreparedFilters keyed;
+		PreparedFilters key;
+	};
+	RelationFilters BuildFilters(idx_t r, const vector<const Class *> &folds, const vector<const Class *> &fks);
+	//! Built filters, shared by sets, e.g. "2|f3,|k3,5,".
+	map<string, RelationFilters> relation_filters;
+	//! Estimates by set: whether estimable, and rows.
+	unordered_map<uint64_t, pair<bool, double>> estimates;
 };
 
 } // namespace cardinal
