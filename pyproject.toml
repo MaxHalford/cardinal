@@ -3,7 +3,7 @@ name = "cardinal-duck"
 version = "0.1.0"
 requires-python = ">=3.13"
 dependencies = [
-    "duckdb==1.5.6",
+    "duckdb==2.0.0",
     "pandas==3.0.6",
     "sorobn",
     "sqlglot==30.22.0",

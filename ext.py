@@ -45,7 +45,7 @@ def warmup(db, out):
     script += "\n".join("EXPLAIN " + q["sql"].rstrip().rstrip(";") + ";" for q in queries)
     script += "\nSELECT count(*), round(sum(seconds), 2) FROM cardinal_fit_eager();\n"
     script += "SELECT count(*) FROM cardinal_models();\n"
-    result = subprocess.run([str(EXTENSION), "-csv", "-noheader", str(db)], input=script, capture_output=True,
+    result = subprocess.run([str(EXTENSION), "-readonly", "-csv", "-noheader", str(db)], input=script, capture_output=True,
                             text=True, check=True)
     # The last two lines: the fit, then the keys.
     fitted, saved = result.stdout.strip().splitlines()[-2:]
