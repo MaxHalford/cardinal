@@ -9,7 +9,7 @@ With `DUCKDB_CE_INJECT`, the optimizer reads estimates from that file instead of
 ```sh
 git clone https://github.com/duckdb/duckdb duckdb
 cd duckdb && git checkout v2.0.0
-git apply ../../patches/duckdb-v2.0.0-ce-trace.patch
+git apply ../duckdb-v2.0.0-ce-trace.patch
 make release
 DUCKDB_CE_TRACE=trace.jsonl build/release/duckdb my.db -c "EXPLAIN SELECT ..."
 DUCKDB_CE_INJECT=estimates.txt DUCKDB_CE_TRACE=trace.jsonl build/release/duckdb my.db -c "EXPLAIN SELECT ..."

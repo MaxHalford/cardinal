@@ -1,10 +1,9 @@
-vendor/bin/
-data/
+research/vendor/bin/
+research/data/
 .venv/
 __pycache__/
 .DS_Store
 build/
 .cache/
-data/out/*/cardinal.db
 duckdb_unittest_tempdir/
 notes/

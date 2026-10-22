@@ -1,6 +1,6 @@
 """Queries whose plan costs more with the extension than without it.
 
-    uv run scripts/worse.py <out> ...
+    uv run worse.py <out> ...
 
 Reads <out>/plans/cardinal_off.jsonl and cardinal_fanout.jsonl (ext.py plans).
 Cost: true cardinalities over DuckDB's cost model. Exits 1 if any query is worse.

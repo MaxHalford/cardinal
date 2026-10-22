@@ -11,7 +11,7 @@ resolution-markers = [
 ]
 
 [[package]]
-name = "cardinal-duck"
+name = "cardinal-research"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [

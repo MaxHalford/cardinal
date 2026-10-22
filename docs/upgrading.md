@@ -38,13 +38,6 @@ uv run scripts/gate.py all               # DuckDB's SQL tests, then the stress t
 
 `gate.py suite` runs DuckDB's SQL tests with the extension. A test that fails with the extension and passes without it is a regression. `gate.py stress` runs concurrent queries, inserts and fits, and compares results with and without the extension. Both must pass.
 
-## 4. Never worse than DuckDB
+## 4. Benchmarks
 
-The research patch traces DuckDB's cardinality questions. Port it to the new release, as `patches/duckdb-<version>-ce-trace.patch`, then on each benchmark:
-
-```sh
-uv run ext.py warmup <db> <out>
-uv run ext.py plans <db> <out> off fanout
-```
-
-Then `uv run scripts/worse.py <out> ...` lists the queries whose plan costs more with the extension than without it, by true cardinalities.
+The research patch traces DuckDB's cardinality questions. Port it to the new release, as `research/patches/duckdb-<version>-ce-trace.patch`, then run each benchmark as in [research/README.md](../research/README.md). Compare with the previous release: `qerror.py` for the accuracy of the estimates DuckDB plans with, `worse.py` for plans worse than DuckDB's own, `runtime.py` for time.

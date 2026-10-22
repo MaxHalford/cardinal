@@ -23,9 +23,11 @@ import duckdb
 import sqlglot
 from sqlglot import exp
 
-ROOT = pathlib.Path(__file__).parent
+# The research directory, and the repository with the extension and DuckDB builds.
+RESEARCH = pathlib.Path(__file__).parent
+ROOT = RESEARCH.parent
 PATCHED = ROOT / "duckdb/build/release/duckdb"
-BASELINE = ROOT / "vendor/bin/duckdb-v2.0.0-baseline"
+BASELINE = RESEARCH / "vendor/bin/duckdb-v2.0.0-baseline"
 TIMEOUT = 600  # seconds per true count
 TRUTH_WORKERS = 4  # true counts run at once
 

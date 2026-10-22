@@ -1,6 +1,6 @@
 """Accuracy of the estimates DuckDB plans with: cardinal against DuckDB alone.
 
-    uv run scripts/qerror.py <out> ...
+    uv run qerror.py <out> ...
 
 Reads <out>/plans/cardinal_off.jsonl and cardinal_fanout.jsonl (ext.py plans), and
 the true counts of <out>/questions.jsonl. Compares, per relation set DuckDB asked

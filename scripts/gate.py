@@ -1,3 +1,7 @@
+# /// script
+# requires-python = ">=3.13"
+# dependencies = ["duckdb==2.0.0"]
+# ///
 """Upgrade gate: checks the extension against the DuckDB it is built with.
 
     uv run scripts/gate.py suite     DuckDB's SQL tests: none may fail only with the extension
