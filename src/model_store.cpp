@@ -1,10 +1,10 @@
 //===----------------------------------------------------------------------===//
 // Models in the store (store.hpp), one row set per database and table:
 //
-//   tables          database, table_name, row_count
-//   columns         database, table_name, column_name, parent, members
-//   states          database, table_name, column_name, state, value, kind
-//   probabilities   database, table_name, column_name, state, parent_state, probability
+//   tables          database, schema_name, table_name, row_count
+//   columns         database, schema_name, table_name, column_name, parent, members
+//   states          database, schema_name, table_name, column_name, state, value, kind
+//   probabilities   database, schema_name, table_name, column_name, state, parent_state, probability
 //
 // Values are text: they are cast to the table column's type when read.
 //===----------------------------------------------------------------------===//
@@ -38,14 +38,15 @@ static const char *KindName(StateKind kind) {
 	}
 }
 
-//! e.g. SELECT ... FROM states WHERE database = $1 AND table_name = $2 ORDER BY ...
+//! e.g. SELECT ... FROM states WHERE database = $1 AND schema_name = $2 AND table_name = $3 ORDER BY ...
 static unique_ptr<QueryRows> Select(Connection &con, const string &database, TableCatalogEntry &table,
                                                   const string &columns, const string &from,
                                                   const string &order = "") {
 	return StoreQuery(con,
-	                  "SELECT " + columns + " FROM " + from + " WHERE database = $1 AND table_name = $2" +
+	                  "SELECT " + columns + " FROM " + from +
+	                      " WHERE database = $1 AND schema_name = $2 AND table_name = $3" +
 	                      (order.empty() ? "" : " ORDER BY " + order),
-	                  {Value(database), Value(table.name)});
+	                  {Value(database), Value(table.ParentSchema().name), Value(table.name)});
 }
 
 static shared_ptr<Model> Read(Connection &con, const string &database, TableCatalogEntry &table) {
@@ -139,13 +140,14 @@ static void Save(Connection &con, const string &database, TableCatalogEntry &tab
 			}
 		}
 		for (auto from : {"tables", "columns", "states", "probabilities"}) {
-			StoreQuery(con, string("DELETE FROM ") + from + " WHERE database = $1 AND table_name = $2",
-			           {Value(database), Value(table.name)});
+			StoreQuery(con,
+			           string("DELETE FROM ") + from + " WHERE database = $1 AND schema_name = $2 AND table_name = $3",
+			           {Value(database), Value(table.ParentSchema().name), Value(table.name)});
 		}
 
-		Value db(database), name(table.name);
+		Value db(database), schema(table.ParentSchema().name), name(table.name);
 		Appender tables(con, "tables");
-		tables.AppendRow(db, name, Value::BIGINT(int64_t(model.Rows())));
+		tables.AppendRow(db, schema, name, Value::BIGINT(int64_t(model.Rows())));
 		tables.Close();
 
 		Appender columns(con, "columns");
@@ -156,18 +158,18 @@ static void Save(Connection &con, const string &database, TableCatalogEntry &tab
 			auto parent = col.parent.IsValid() ? Value(cols[col.parent.GetIndex()].name) : Value(LogicalType::VARCHAR);
 			auto members =
 			    col.members.IsValid() ? Value::BIGINT(int64_t(col.members.GetIndex())) : Value(LogicalType::BIGINT);
-			columns.AppendRow(db, name, Value(col.name), parent, members);
+			columns.AppendRow(db, schema, name, Value(col.name), parent, members);
 
 			for (idx_t s = 0; s < col.values.size(); s++) {
 				auto value = col.kinds[s] == StateKind::VALUE ? col.values[s].DefaultCastAs(LogicalType::VARCHAR)
 				                                              : Value(LogicalType::VARCHAR);
-				states.AppendRow(db, name, Value(col.name), Value::INTEGER(int32_t(s)), value,
+				states.AppendRow(db, schema, name, Value(col.name), Value::INTEGER(int32_t(s)), value,
 				                 Value(KindName(col.kinds[s])));
 			}
 			for (auto &entry : col.probabilities) {
 				auto parent_state =
 				    col.parent.IsValid() ? Value::INTEGER(int32_t(entry.parent_state)) : Value(LogicalType::INTEGER);
-				probabilities.AppendRow(db, name, Value(col.name), Value::INTEGER(int32_t(entry.state)), parent_state,
+				probabilities.AppendRow(db, schema, name, Value(col.name), Value::INTEGER(int32_t(entry.state)), parent_state,
 				                        Value::DOUBLE(entry.p));
 			}
 		}
@@ -198,20 +200,22 @@ vector<StoredModel> StoredModels(ClientContext &context, Catalog &catalog) {
 	// Plain SQL, grouped here: the store's instance may lack core functions, e.g. list().
 	WithStore(context, [&](Connection &con) {
 		auto result = StoreQuery(con,
-		                         "SELECT t.table_name, t.row_count, c.column_name "
-		                         "FROM tables t JOIN columns c USING (database, table_name) "
-		                         "WHERE database = $1 ORDER BY t.table_name, c.column_name",
+		                         "SELECT t.schema_name, t.table_name, t.row_count, c.column_name "
+		                         "FROM tables t JOIN columns c USING (database, schema_name, table_name) "
+		                         "WHERE database = $1 ORDER BY t.schema_name, t.table_name, c.column_name",
 		                         {Value(database)});
 		auto &rows = *result;
 		for (idx_t i = 0; i < rows.RowCount(); i++) {
-			auto table = rows.GetValue(0, i).ToString();
-			if (models.empty() || models.back().table != table) {
+			auto schema = rows.GetValue(0, i).ToString();
+			auto table = rows.GetValue(1, i).ToString();
+			if (models.empty() || models.back().schema != schema || models.back().table != table) {
 				StoredModel model;
+				model.schema = schema;
 				model.table = table;
-				model.rows = idx_t(rows.GetValue(1, i).GetValue<int64_t>());
+				model.rows = idx_t(rows.GetValue(2, i).GetValue<int64_t>());
 				models.push_back(std::move(model));
 			}
-			models.back().columns.push_back(rows.GetValue(2, i).ToString());
+			models.back().columns.push_back(rows.GetValue(3, i).ToString());
 		}
 	});
 	return models;

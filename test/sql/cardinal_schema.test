@@ -1,0 +1,31 @@
+# name: test/sql/cardinal_schema.test
+# description: tables of the same name in two schemas have their own models
+# group: [sql]
+
+require cardinal
+
+load __TEST_DIR__/cardinal_schema.db
+
+statement ok
+SET cardinal_store = '__TEST_DIR__/cardinal_schema_store.db';
+
+statement ok
+CREATE SCHEMA s1;
+
+statement ok
+CREATE SCHEMA s2;
+
+statement ok
+CREATE TABLE s1.t AS SELECT range AS a FROM range(100);
+
+statement ok
+CREATE TABLE s2.t AS SELECT range AS b, range % 2 AS c FROM range(300);
+
+statement ok
+SELECT * FROM cardinal_fit_eager();
+
+query II
+SELECT row_count, columns FROM cardinal_models() ORDER BY row_count;
+----
+100	[a]
+300	[b, c]

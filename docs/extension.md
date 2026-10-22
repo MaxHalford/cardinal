@@ -48,7 +48,7 @@ A model is refitted when its table's row count changes by more than 10%, or when
 Models are saved in their own DuckDB file, never in your database:
 
 ```
-~/.duckdb/extension_data/cardinal/v2.0.0/store-1.db
+~/.duckdb/extension_data/cardinal/v2.0.0/store-2.db
 ```
 
 Each DuckDB release has its own file, as extensions do: after an upgrade, cardinal learns and fits again from scratch, and old files can be deleted. They're keyed by the path of your database file and the table, so a later session starts with them. A moved or copied database file starts from scratch too. Databases without a file, e.g. in memory, keep models in memory only. If another process is using the file, cardinal waits briefly, then keeps models in memory. Deleting the file forgets everything.

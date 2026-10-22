@@ -13,13 +13,13 @@ namespace duckdb {
 namespace cardinal {
 
 //! Version of the store's tables. A change starts a new store, as a DuckDB release does.
-static constexpr idx_t STORE_VERSION = 1;
+static constexpr idx_t STORE_VERSION = 2;
 
 static const char *STORE_TABLES = R"(
-CREATE TABLE IF NOT EXISTS tables (database VARCHAR, table_name VARCHAR, row_count BIGINT);
-CREATE TABLE IF NOT EXISTS columns (database VARCHAR, table_name VARCHAR, column_name VARCHAR, parent VARCHAR, members BIGINT);
-CREATE TABLE IF NOT EXISTS states (database VARCHAR, table_name VARCHAR, column_name VARCHAR, state INTEGER, value VARCHAR, kind VARCHAR);
-CREATE TABLE IF NOT EXISTS probabilities (database VARCHAR, table_name VARCHAR, column_name VARCHAR, state INTEGER, parent_state INTEGER, probability DOUBLE);
+CREATE TABLE IF NOT EXISTS tables (database VARCHAR, schema_name VARCHAR, table_name VARCHAR, row_count BIGINT);
+CREATE TABLE IF NOT EXISTS columns (database VARCHAR, schema_name VARCHAR, table_name VARCHAR, column_name VARCHAR, parent VARCHAR, members BIGINT);
+CREATE TABLE IF NOT EXISTS states (database VARCHAR, schema_name VARCHAR, table_name VARCHAR, column_name VARCHAR, state INTEGER, value VARCHAR, kind VARCHAR);
+CREATE TABLE IF NOT EXISTS probabilities (database VARCHAR, schema_name VARCHAR, table_name VARCHAR, column_name VARCHAR, state INTEGER, parent_state INTEGER, probability DOUBLE);
 CREATE TABLE IF NOT EXISTS keys (database VARCHAR, fk_schema VARCHAR, fk_table VARCHAR, fk_column VARCHAR, pk_schema VARCHAR, pk_table VARCHAR, pk_column VARCHAR);
 )";
 

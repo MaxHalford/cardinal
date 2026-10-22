@@ -166,8 +166,8 @@ static void Fit(ClientContext &context, TableFunctionInput &input, DataChunk &ou
 //! cardinal_models(): the models saved for the current database.
 static unique_ptr<FunctionData> ModelsBind(ClientContext &context, TableFunctionBindInput &input,
                                            vector<LogicalType> &types, vector<Identifier> &names) {
-	names = {"table_name", "row_count", "columns"};
-	types = {LogicalType::VARCHAR, LogicalType::BIGINT, LogicalType::LIST(LogicalType::VARCHAR)};
+	names = {"schema_name", "table_name", "row_count", "columns"};
+	types = {LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::BIGINT, LogicalType::LIST(LogicalType::VARCHAR)};
 	return make_uniq<TableFunctionData>();
 }
 
@@ -192,9 +192,10 @@ static void Models(ClientContext &context, TableFunctionInput &input, DataChunk 
 		for (auto &column : model.columns) {
 			columns.emplace_back(column);
 		}
-		output.data[0].Append(Value(model.table));
-		output.data[1].Append(Value::BIGINT(int64_t(model.rows)));
-		output.data[2].Append(Value::LIST(LogicalType::VARCHAR, std::move(columns)));
+		output.data[0].Append(Value(model.schema));
+		output.data[1].Append(Value(model.table));
+		output.data[2].Append(Value::BIGINT(int64_t(model.rows)));
+		output.data[3].Append(Value::LIST(LogicalType::VARCHAR, std::move(columns)));
 	}
 }
 

@@ -15,6 +15,7 @@ bool SaveModel(ClientContext &context, TableCatalogEntry &table, const Model &mo
 
 //! A model saved in the store: its table, rows at fit time, and columns.
 struct StoredModel {
+	string schema;
 	string table;
 	idx_t rows;
 	vector<string> columns;
