@@ -319,9 +319,7 @@ static bool Counts(const TableFilter &filter) {
 	return !ExpressionFilter::IsOptionalFilter(filter);
 }
 
-//! The filter without its optional parts, e.g. x > 5 AND optional(...) -> x > 5.
-//! Null when internal filter functions remain: those cannot run on model states.
-static unique_ptr<Expression> Strip(const Expression &expr) {
+unique_ptr<Expression> RequiredPart(const Expression &expr) {
 	if (ExpressionFilter::IsOptionalExpression(expr)) {
 		return nullptr;
 	}
@@ -370,7 +368,7 @@ bool PrepareFilters(LogicalGet &get, const vector<unique_ptr<Expression>> &filte
 			return false;
 		}
 		BoundReferenceExpression ref(get.returned_types[primary], column.GetIndex());
-		auto expr = Strip(*entry.Filter().ToExpression(ref));
+		auto expr = RequiredPart(*entry.Filter().ToExpression(ref));
 		if (!expr) {
 			return false;
 		}

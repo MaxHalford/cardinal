@@ -45,3 +45,16 @@ EXPLAIN SELECT count(*) FROM fact f, dim d
 WHERE f.dim_id = d.id AND ((d.kind = 1 AND f.flag = 1) OR (d.kind = 2 AND f.flag = 2));
 ----
 physical_plan	<REGEX>:.*Hash Join.*~2,000 rows.*
+
+# A column whose name needs quotes: the SQL that reads the dimension's passing keys quotes it.
+statement ok
+CREATE TABLE dim2 (id BIGINT PRIMARY KEY, "group" BIGINT);
+
+statement ok
+INSERT INTO dim2 SELECT range, range % 10 FROM range(100);
+
+query II
+EXPLAIN SELECT count(*) FROM fact f, dim2 d
+WHERE f.dim_id = d.id AND ((d."group" = 1 AND f.flag = 2) OR (d."group" = 2 AND f.flag = 3));
+----
+physical_plan	<REGEX>:.*Hash Join.*~1 row[^s].*

@@ -30,6 +30,10 @@ bool Expect(ClientContext &context, const Model &model, const PreparedFilters &f
             double &result);
 
 //! The table columns the scan's filters read: its table filters and the filters above it.
+//! The filter without its optional parts, e.g. x > 5 AND optional(...) -> x > 5.
+//! Null when internal filter functions remain: they have no SQL form, nor run on model states.
+unique_ptr<Expression> RequiredPart(const Expression &expr);
+
 vector<string> FilteredColumns(LogicalGet &get, const vector<unique_ptr<Expression>> &filters);
 
 //! Rows of a scan that pass its filters, by the table's model: rows x P(filters).
