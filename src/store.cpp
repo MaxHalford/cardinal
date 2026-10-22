@@ -11,6 +11,9 @@
 
 namespace duckdb {
 
+//! Version of the store's tables. A change starts a new store, as a DuckDB release does.
+static constexpr idx_t STORE_VERSION = 1;
+
 static const char *STORE_TABLES = R"(
 CREATE TABLE IF NOT EXISTS tables (database VARCHAR, table_name VARCHAR, row_count BIGINT);
 CREATE TABLE IF NOT EXISTS columns (database VARCHAR, table_name VARCHAR, column_name VARCHAR, parent VARCHAR, members BIGINT);
@@ -49,7 +52,10 @@ static string StorePath(ClientContext &context) {
 	}
 	LocalFileSystem fs;
 	auto home = FileSystem::GetHomeDirectory(nullptr);
-	return fs.JoinPath(home, ".duckdb", "extension_data", "cardinal", "cardinal.db");
+	// One store per DuckDB release: no migration, models are fitted again after an upgrade.
+	// e.g. ~/.duckdb/extension_data/cardinal/v2.0.0/store-1.db
+	auto file = "store-" + to_string(STORE_VERSION) + ".db";
+	return fs.JoinPath(home, ".duckdb", "extension_data", "cardinal", DuckDB::LibraryVersion(), file);
 }
 
 unique_ptr<QueryRows> StoreQuery(Connection &con, const string &sql, vector<Value> parameters) {
