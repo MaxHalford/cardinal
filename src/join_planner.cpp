@@ -158,7 +158,7 @@ static vector<uint64_t> ConnectedSets(const QueryGraph &graph) {
 	return sets;
 }
 
-//! DuckDB's formula for a set: coefficients of θ = (n per relation, d per class), and offset.
+//! DuckDB's formula for a set: coefficients of θ = (log n per relation, log d per class), and offset.
 static void FormulaRow(const QueryGraph &graph, uint64_t members, const vector<double> &d, vector<double> &x,
                        double &offset) {
 	auto count = graph.relations.size();
@@ -183,6 +183,9 @@ static void FormulaRow(const QueryGraph &graph, uint64_t members, const vector<d
 	std::stable_sort(order.begin(), order.end(),
 	                 [&](idx_t a, idx_t b) { return d[graph.edge_class[a]] > d[graph.edge_class[b]]; });
 
+	// Edges after the set is connected: a penalty per distinct count, unless their class
+	// was already used, e.g. a.x = b.x = c.x adds nothing for a.x = c.x.
+	set<idx_t> used;
 	set<idx_t> unused;
 	for (auto e : order) {
 		auto &edge = graph.edges[e];
@@ -192,9 +195,12 @@ static void FormulaRow(const QueryGraph &graph, uint64_t members, const vector<d
 		}
 		auto c = graph.edge_class[e];
 		if (components == 1) {
-			unused.insert(c);
+			if (!used.count(c)) {
+				unused.insert(idx_t(MaxValue(std::round(std::exp(d[c])), 1.0)));
+			}
 			continue;
 		}
+		used.insert(c);
 		if (find(a) != find(b)) {
 			parent[find(a)] = find(b);
 			components--;
