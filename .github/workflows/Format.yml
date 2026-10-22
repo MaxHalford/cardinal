@@ -20,7 +20,7 @@ jobs:
       - name: Format
         run: |
           make format-fix
-          git diff -- src test > format.patch
+          git diff -- src test CMakeLists.txt > format.patch
 
       - uses: actions/upload-artifact@v4
         with:
