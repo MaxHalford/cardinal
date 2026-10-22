@@ -1,11 +1,13 @@
 #include "query_graph.hpp"
 
 #include "duckdb/common/bit_utils.hpp"
+#include "duckdb/optimizer/filter_pullup.hpp"
 #include "duckdb/optimizer/filter_pushdown.hpp"
 #include "duckdb/planner/expression/bound_cast_expression.hpp"
 #include "duckdb/planner/expression/bound_columnref_expression.hpp"
 #include "duckdb/planner/column_binding_map.hpp"
 #include "duckdb/planner/expression/bound_comparison_expression.hpp"
+#include "duckdb/planner/operator/logical_any_join.hpp"
 #include "duckdb/planner/operator/logical_comparison_join.hpp"
 #include "duckdb/planner/operator/logical_filter.hpp"
 #include "duckdb/planner/expression_iterator.hpp"
@@ -39,6 +41,14 @@ public:
 		case LogicalOperatorType::LOGICAL_COMPARISON_JOIN:
 			AddJoin(op.Cast<LogicalComparisonJoin>());
 			break;
+		case LogicalOperatorType::LOGICAL_ANY_JOIN: {
+			// e.g. an OR across both sides, as the join's condition.
+			auto &join = op.Cast<LogicalAnyJoin>();
+			if (join.join_type == JoinType::INNER) {
+				AddCrossFilter(*join.condition);
+			}
+			break;
+		}
 		default:
 			break;
 		}
@@ -234,7 +244,12 @@ QueryGraph BuildGraph(Optimizer &optimizer, LogicalOperator &plan) {
 		return graph;
 	}
 
-	// The passes before join ordering that place filters and join conditions.
+	// The passes before join ordering that place filters and join conditions, in DuckDB's
+	// order. The rewriter, e.g., takes a join condition repeated in each branch of an OR
+	// out of it, and each table's part of the OR.
+	optimizer.rewriter.VisitOperator(*graph.plan);
+	FilterPullup pullup;
+	graph.plan = pullup.Rewrite(std::move(graph.plan));
 	FilterPushdown pushdown(optimizer);
 	graph.plan = pushdown.Rewrite(std::move(graph.plan));
 
