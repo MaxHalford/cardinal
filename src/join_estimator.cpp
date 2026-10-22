@@ -252,7 +252,8 @@ const vector<Value> *JoinEstimator::FoldKeys(const Class &c) {
 			filters.push_back(condition->Copy());
 		}
 		unique_ptr<vector<Value>> keys;
-		auto result = InnerQuery(context, ScanQuery(get, filters, KeywordHelper::WriteOptionallyQuoted(domain.key.column)));
+		auto result =
+		    InnerQuery(context, ScanQuery(get, filters, KeywordHelper::WriteOptionallyQuoted(domain.key.column)));
 		if (result) {
 			keys = make_uniq<vector<Value>>();
 			for (idx_t i = 0; i < result->RowCount(); i++) {
@@ -334,7 +335,12 @@ bool JoinEstimator::EstimateWith(uint64_t set, const Branch &conditions, double 
 				// Two columns of one relation in a class: a selection, not a join.
 				return false;
 			}
-			members[column.first] = relations[column.first].table.get().GetColumns().GetColumn(LogicalIndex(column.second)).Name().GetIdentifierName();
+			members[column.first] = relations[column.first]
+			                            .table.get()
+			                            .GetColumns()
+			                            .GetColumn(LogicalIndex(column.second))
+			                            .Name()
+			                            .GetIdentifierName();
 		}
 		if (members.size() < 2) {
 			continue;
@@ -445,7 +451,7 @@ bool JoinEstimator::EstimateWith(uint64_t set, const Branch &conditions, double 
 }
 
 JoinEstimator::RelationFilters JoinEstimator::BuildFilters(idx_t r, const vector<const Class *> &folds,
-                                                          const vector<const Class *> &fks) {
+                                                           const vector<const Class *> &fks) {
 	RelationFilters result;
 	auto &relation = relations[r];
 	auto &model = *relation.model;
@@ -503,7 +509,8 @@ JoinEstimator::RelationFilters JoinEstimator::BuildFilters(idx_t r, const vector
 		}
 		auto &type = model.Columns()[column.GetIndex()].type;
 		for (auto target : {&result.keyed, &result.key}) {
-			auto not_null = make_uniq<BoundOperatorExpression>(ExpressionType::OPERATOR_IS_NOT_NULL, LogicalType::BOOLEAN);
+			auto not_null =
+			    make_uniq<BoundOperatorExpression>(ExpressionType::OPERATOR_IS_NOT_NULL, LogicalType::BOOLEAN);
 			not_null->GetChildrenMutable().push_back(make_uniq<BoundReferenceExpression>(type, column.GetIndex()));
 			target->filters.push_back(std::move(not_null));
 			target->key += " AND #" + to_string(column.GetIndex()) + " IS NOT NULL";

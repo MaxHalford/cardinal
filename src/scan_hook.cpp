@@ -201,9 +201,8 @@ static void ScanHook(ClientContext &context, LogicalGet &get, FunctionData *bind
 static unique_ptr<NodeStatistics> ScanCardinality(ClientContext &context, const FunctionData *bind_data) {
 	for (auto frame = frames.rbegin(); frame != frames.rend(); frame++) {
 		auto original = frame->original.find(bind_data);
-		auto stats = original != frame->original.end() && original->second
-		                 ? original->second(context, bind_data)
-		                 : unique_ptr<NodeStatistics>();
+		auto stats = original != frame->original.end() && original->second ? original->second(context, bind_data)
+		                                                                   : unique_ptr<NodeStatistics>();
 		auto hit = frame->rows.find(bind_data);
 		if (hit == frame->rows.end()) {
 			if (original != frame->original.end()) {

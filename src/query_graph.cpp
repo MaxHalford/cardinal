@@ -68,8 +68,10 @@ private:
 			if (ids[i].IsVirtualColumn()) {
 				continue;
 			}
-			columns[ColumnBinding(get.table_index, ProjectionIndex(i))] = GraphColumn(relation, ids[i].GetPrimaryIndex());
-			scan_binding[GraphColumn(relation, ids[i].GetPrimaryIndex())] = ColumnBinding(get.table_index, ProjectionIndex(i));
+			columns[ColumnBinding(get.table_index, ProjectionIndex(i))] =
+			    GraphColumn(relation, ids[i].GetPrimaryIndex());
+			scan_binding[GraphColumn(relation, ids[i].GetPrimaryIndex())] =
+			    ColumnBinding(get.table_index, ProjectionIndex(i));
 		}
 	}
 
@@ -155,14 +157,15 @@ private:
 				continue;
 			}
 			// e.g. a.x < b.y: a filter across the relations.
-			auto comparison = BoundComparisonExpression::Create(condition.GetComparisonType(), condition.GetLHS().Copy(),
-			                                                    condition.GetRHS().Copy());
+			auto comparison = BoundComparisonExpression::Create(condition.GetComparisonType(),
+			                                                    condition.GetLHS().Copy(), condition.GetRHS().Copy());
 			AddCrossFilter(*comparison);
 		}
 	}
 
 	bool AddEquality(Expression &expr) {
-		if (!BoundComparisonExpression::IsComparison(expr) || expr.GetExpressionType() != ExpressionType::COMPARE_EQUAL) {
+		if (!BoundComparisonExpression::IsComparison(expr) ||
+		    expr.GetExpressionType() != ExpressionType::COMPARE_EQUAL) {
 			return false;
 		}
 		auto &comparison = expr.Cast<BoundFunctionExpression>();

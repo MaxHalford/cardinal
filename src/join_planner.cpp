@@ -39,7 +39,13 @@ static idx_t TableRows(TableCatalogEntry &table) {
 }
 
 static string ColumnName(const QueryGraph &graph, const GraphColumn &column) {
-	return graph.relations[column.first].get.get().GetTable()->GetColumns().GetColumn(LogicalIndex(column.second)).Name().GetIdentifierName();
+	return graph.relations[column.first]
+	    .get.get()
+	    .GetTable()
+	    ->GetColumns()
+	    .GetColumn(LogicalIndex(column.second))
+	    .Name()
+	    .GetIdentifierName();
 }
 
 //! Each class's primary key: the unique column with the most rows, else the one its
@@ -96,7 +102,8 @@ static vector<JoinDomain> Domains(ClientContext &context, const QueryGraph &grap
 		}
 		if (domain.known) {
 			for (auto &column : graph.classes[c]) {
-				AddFilterColumns(context, *graph.relations[column.first].get.get().GetTable(), {ColumnName(graph, column)});
+				AddFilterColumns(context, *graph.relations[column.first].get.get().GetTable(),
+				                 {ColumnName(graph, column)});
 			}
 		}
 	}
@@ -120,7 +127,8 @@ static void DimensionKeys(ClientContext &context, const QueryGraph &graph, vecto
 		// Small: it folds under a filter across relations too, with the keys passing it.
 		domain.small = true;
 		if (!FilteredColumns(get, relation.filters).empty()) {
-			auto result = InnerQuery(context, ScanQuery(get, relation.filters, KeywordHelper::WriteOptionallyQuoted(domain.key.column)));
+			auto result = InnerQuery(
+			    context, ScanQuery(get, relation.filters, KeywordHelper::WriteOptionallyQuoted(domain.key.column)));
 			if (result) {
 				domain.folds = true;
 				for (idx_t i = 0; i < result->RowCount(); i++) {
@@ -234,7 +242,8 @@ static void FormulaRow(const QueryGraph &graph, uint64_t members, const vector<d
 }
 
 //! Solves (XᵀX + λI) θ = Xᵀy + λθ0 by Gaussian elimination.
-static vector<double> RidgeSolve(const vector<vector<double>> &X, const vector<double> &y, const vector<double> &theta0) {
+static vector<double> RidgeSolve(const vector<vector<double>> &X, const vector<double> &y,
+                                 const vector<double> &theta0) {
 	auto n = theta0.size();
 	vector<vector<double>> a(n, vector<double>(n + 1, 0));
 	for (idx_t i = 0; i < n; i++) {

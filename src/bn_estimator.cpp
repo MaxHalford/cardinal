@@ -54,21 +54,21 @@ struct Target {
 static unique_ptr<Expression> Normalize(const Expression &expr, LogicalGet &get, const Model &model) {
 	auto copy = expr.Copy();
 	bool ok = true;
-	ExpressionIterator::VisitExpressionMutable<BoundColumnRefExpression>(
-	    copy, [&](BoundColumnRefExpression &ref, unique_ptr<Expression> &slot) {
-		    auto &ids = get.GetColumnIds();
-		    if (ref.Binding().table_index != get.table_index || ref.Binding().column_index >= ids.size()) {
-			    ok = false;
-			    return;
-		    }
-		    auto primary = ids[ref.Binding().column_index].GetPrimaryIndex();
-		    auto column = primary < get.names.size() ? model.Find(get.names[primary].GetIdentifierName()) : optional_idx();
-		    if (!column.IsValid()) {
-			    ok = false;
-			    return;
-		    }
-		    slot = make_uniq<BoundReferenceExpression>(ref.GetReturnType(), column.GetIndex());
-	    });
+	ExpressionIterator::VisitExpressionMutable<BoundColumnRefExpression>(copy, [&](BoundColumnRefExpression &ref,
+	                                                                               unique_ptr<Expression> &slot) {
+		auto &ids = get.GetColumnIds();
+		if (ref.Binding().table_index != get.table_index || ref.Binding().column_index >= ids.size()) {
+			ok = false;
+			return;
+		}
+		auto primary = ids[ref.Binding().column_index].GetPrimaryIndex();
+		auto column = primary < get.names.size() ? model.Find(get.names[primary].GetIdentifierName()) : optional_idx();
+		if (!column.IsValid()) {
+			ok = false;
+			return;
+		}
+		slot = make_uniq<BoundReferenceExpression>(ref.GetReturnType(), column.GetIndex());
+	});
 	return ok ? std::move(copy) : nullptr;
 }
 

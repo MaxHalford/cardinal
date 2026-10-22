@@ -134,8 +134,8 @@ static idx_t KeptCount(const vector<Distinct> &ranked, const FitOptions &options
 }
 
 //! Step 2 for one column: its states, values still unset. Codes: kept values, then OTHER, then NULL.
-static ModelColumn States(const FitColumn &fit, const LogicalType &type, const vector<Distinct> &ranked,
-                          idx_t non_null, idx_t rows, const FitOptions &options) {
+static ModelColumn States(const FitColumn &fit, const LogicalType &type, const vector<Distinct> &ranked, idx_t non_null,
+                          idx_t rows, const FitOptions &options) {
 	// The whole table may have more distinct values than the sample.
 	auto distinct = MaxValue<idx_t>(fit.distinct.IsValid() ? fit.distinct.GetIndex() : 0, ranked.size());
 	bool compact = distinct > MAX_STATES;
@@ -455,8 +455,9 @@ shared_ptr<Model> FitModel(Connection &con, TableCatalogEntry &table, const vect
 	hashes.clear();
 	for (idx_t i = 0; i < fanouts.size(); i++) {
 		codes.emplace_back();
-		columns.push_back(BinFanout(FanoutName(fanouts[i].fk_table.get().name.GetIdentifierName(), fanouts[i].fk_column),
-		                            fanout_counts[i], codes.back()));
+		columns.push_back(
+		    BinFanout(FanoutName(fanouts[i].fk_table.get().name.GetIdentifierName(), fanouts[i].fk_column),
+		              fanout_counts[i], codes.back()));
 	}
 	result.reset();
 

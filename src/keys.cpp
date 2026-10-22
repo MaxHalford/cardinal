@@ -78,8 +78,8 @@ static KeyRegistry &Registry(ClientContext &context, const string &catalog) {
 	}
 	vector<pair<KeyColumn, KeyColumn>> stored;
 	WithStore(context, [&](Connection &con) {
-		auto result = StoreQuery(con, string("SELECT ") + KEYS_COLUMNS + " FROM keys WHERE database = $1",
-		                         {Value(database)});
+		auto result =
+		    StoreQuery(con, string("SELECT ") + KEYS_COLUMNS + " FROM keys WHERE database = $1", {Value(database)});
 		auto &rows = *result;
 		for (idx_t i = 0; i < rows.RowCount(); i++) {
 			KeyColumn fk, pk;
@@ -114,8 +114,7 @@ static bool DeclaredUnique(TableCatalogEntry &table, const string &column) {
 		if (names.size() == 1 && names[0] == Identifier(column)) {
 			return true;
 		}
-		if (names.empty() && unique.HasIndex() &&
-		    table.GetColumn(unique.GetIndex()).Name() == Identifier(column)) {
+		if (names.empty() && unique.HasIndex() && table.GetColumn(unique.GetIndex()).Name() == Identifier(column)) {
 			return true;
 		}
 	}
@@ -131,10 +130,11 @@ static bool CheckUnique(ClientContext &context, TableCatalogEntry &table, const 
 		return false;
 	}
 	auto name = KeywordHelper::WriteOptionallyQuoted(column);
-	auto result = InnerQuery(context, "SELECT count(DISTINCT " + name + ") = count(" + name + ") AND count(" + name +
-	                                      ") > 0 FROM " + KeywordHelper::WriteOptionallyQuoted(table.ParentCatalog().GetName().GetIdentifierName()) +
-	                                      "." + KeywordHelper::WriteOptionallyQuoted(table.ParentSchema().name.GetIdentifierName()) + "." +
-	                                      KeywordHelper::WriteOptionallyQuoted(table.name.GetIdentifierName()));
+	auto result = InnerQuery(
+	    context, "SELECT count(DISTINCT " + name + ") = count(" + name + ") AND count(" + name + ") > 0 FROM " +
+	                 KeywordHelper::WriteOptionallyQuoted(table.ParentCatalog().GetName().GetIdentifierName()) + "." +
+	                 KeywordHelper::WriteOptionallyQuoted(table.ParentSchema().name.GetIdentifierName()) + "." +
+	                 KeywordHelper::WriteOptionallyQuoted(table.name.GetIdentifierName()));
 	return result && result->GetValue(0, 0).GetValue<bool>();
 }
 
@@ -225,8 +225,9 @@ bool SaveKeys(ClientContext &context, Catalog &catalog) {
 		con.BeginTransaction();
 		try {
 			for (auto &key : keys) {
-				StoreQuery(con, "DELETE FROM keys WHERE database = $1 AND fk_schema = $2 AND fk_table = $3 AND fk_column = $4",
-				           {Value(database), Value(key.first.schema), Value(key.first.table), Value(key.first.column)});
+				StoreQuery(
+				    con, "DELETE FROM keys WHERE database = $1 AND fk_schema = $2 AND fk_table = $3 AND fk_column = $4",
+				    {Value(database), Value(key.first.schema), Value(key.first.table), Value(key.first.column)});
 			}
 			Appender appender(con, "keys");
 			for (auto &key : keys) {

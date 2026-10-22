@@ -16,20 +16,17 @@
 namespace duckdb {
 namespace cardinal {
 
-
 struct FitBindData : public TableFunctionData {
 	vector<QualifiedName> tables;
 };
-
 
 //! Every table of the default database.
 static vector<QualifiedName> AllTables(ClientContext &context) {
 	vector<QualifiedName> tables;
 	auto &catalog = Catalog::GetCatalog(context, DatabaseManager::GetDefaultDatabase(context));
 	catalog.ScanSchemas(context, [&](SchemaCatalogEntry &schema) {
-		schema.Scan(context, CatalogType::TABLE_ENTRY, [&](CatalogEntry &entry) {
-			tables.emplace_back(catalog.GetName(), schema.name, entry.name);
-		});
+		schema.Scan(context, CatalogType::TABLE_ENTRY,
+		            [&](CatalogEntry &entry) { tables.emplace_back(catalog.GetName(), schema.name, entry.name); });
 	});
 	return tables;
 }
@@ -47,7 +44,6 @@ static unique_ptr<FunctionData> FitBind(ClientContext &context, TableFunctionBin
 	types = {LogicalType::VARCHAR, LogicalType::BIGINT, LogicalType::BIGINT, LogicalType::DOUBLE};
 	return std::move(data);
 }
-
 
 //! One table to fit, and what came of it.
 struct FitJob {
@@ -69,7 +65,6 @@ struct FitState : public GlobalTableFunctionState {
 	idx_t next = 0;
 };
 
-
 static unique_ptr<GlobalTableFunctionState> FitInit(ClientContext &context, TableFunctionInitInput &input) {
 	return make_uniq<FitState>();
 }
@@ -79,8 +74,7 @@ static constexpr idx_t MAX_PARALLEL_FITS = 8;
 
 //! The table's columns to model, with their distinct counts. Runs in the caller's transaction.
 static FitJob Prepare(ClientContext &context, const FitBindData &data, const QualifiedName &name) {
-	auto &table =
-	    Catalog::GetEntry(context, CatalogType::TABLE_ENTRY, name).Cast<TableCatalogEntry>();
+	auto &table = Catalog::GetEntry(context, CatalogType::TABLE_ENTRY, name).Cast<TableCatalogEntry>();
 
 	FitJob job(table);
 	// Default: the columns queries filter on, when known. Tables queries only join

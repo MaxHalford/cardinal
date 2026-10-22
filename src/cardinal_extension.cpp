@@ -46,7 +46,8 @@ static void LoadInternal(ExtensionLoader &loader) {
 	                          Value::BOOLEAN(true));
 	config.AddExtensionOption(STORE_SETTING, "The store's file: ~/.duckdb/extension_data/cardinal/cardinal.db if empty",
 	                          LogicalType::VARCHAR, Value(""));
-	config.AddExtensionOption(BACKGROUND_SETTING, "Fit models on a worker thread: queries plan with what there is meanwhile",
+	config.AddExtensionOption(BACKGROUND_SETTING,
+	                          "Fit models on a worker thread: queries plan with what there is meanwhile",
 	                          LogicalType::BOOLEAN, Value::BOOLEAN(false));
 
 	OptimizerExtension extension;

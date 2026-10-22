@@ -40,8 +40,7 @@ static const char *KindName(StateKind kind) {
 
 //! e.g. SELECT ... FROM states WHERE database = $1 AND schema_name = $2 AND table_name = $3 ORDER BY ...
 static unique_ptr<QueryRows> Select(Connection &con, const string &database, TableCatalogEntry &table,
-                                                  const string &columns, const string &from,
-                                                  const string &order = "") {
+                                    const string &columns, const string &from, const string &order = "") {
 	return StoreQuery(con,
 	                  "SELECT " + columns + " FROM " + from +
 	                      " WHERE database = $1 AND schema_name = $2 AND table_name = $3" +
@@ -78,12 +77,14 @@ static shared_ptr<Model> Read(Connection &con, const string &database, TableCata
 	// Fanout columns, e.g. F(badges.UserId), are not table columns: their states are mean counts.
 	auto &table_columns = table.GetColumns();
 	for (auto &column : columns) {
-		column.type = table_columns.ColumnExists(Identifier(column.name)) ? table_columns.GetColumn(Identifier(column.name)).Type()
-		                                                      : LogicalType::DOUBLE;
+		column.type = table_columns.ColumnExists(Identifier(column.name))
+		                  ? table_columns.GetColumn(Identifier(column.name)).Type()
+		                  : LogicalType::DOUBLE;
 	}
 
 	// States arrive in order: state i is the i-th of its column.
-	auto states_result = Select(con, database, table, "column_name, state, value, kind", "states", "column_name, state");
+	auto states_result =
+	    Select(con, database, table, "column_name, state, value, kind", "states", "column_name, state");
 	auto &states = *states_result;
 	for (idx_t i = 0; i < states.RowCount(); i++) {
 		auto &column = columns[index.at(states.GetValue(0, i).ToString())];
@@ -169,8 +170,8 @@ static void Save(Connection &con, const string &database, TableCatalogEntry &tab
 			for (auto &entry : col.probabilities) {
 				auto parent_state =
 				    col.parent.IsValid() ? Value::INTEGER(int32_t(entry.parent_state)) : Value(LogicalType::INTEGER);
-				probabilities.AppendRow(db, schema, name, Value(col.name), Value::INTEGER(int32_t(entry.state)), parent_state,
-				                        Value::DOUBLE(entry.p));
+				probabilities.AppendRow(db, schema, name, Value(col.name), Value::INTEGER(int32_t(entry.state)),
+				                        parent_state, Value::DOUBLE(entry.p));
 			}
 		}
 		columns.Close();
