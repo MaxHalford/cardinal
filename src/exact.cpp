@@ -20,7 +20,9 @@ string ScanQuery(LogicalGet &get, const vector<unique_ptr<Expression>> &filters,
 		if (ExpressionFilter::IsOptionalFilter(entry.Filter())) {
 			continue;
 		}
-		auto column = KeywordHelper::WriteOptionallyQuoted(get.names[entry.GetIndex()].GetIdentifierName());
+		// Filters are keyed by the scan's columns, e.g. #0 is info when the scan reads (info, id).
+		auto primary = get.GetColumnIndex(entry.GetIndex()).GetPrimaryIndex();
+		auto column = KeywordHelper::WriteOptionallyQuoted(get.names[primary].GetIdentifierName());
 		conditions.push_back(ExpressionFilter::GetExpressionFilter(entry.Filter(), "cardinal").ToString(column));
 	}
 	for (auto &expr : filters) {
