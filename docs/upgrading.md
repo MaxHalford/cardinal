@@ -47,4 +47,4 @@ uv run ext.py warmup <db> <out>
 uv run ext.py plans <db> <out> off fanout
 ```
 
-Compare `cardinal_fanout` with `cardinal_off` in `<out>/plans/`. No query may get a plan with a higher cost.
+Then `uv run scripts/worse.py <out> ...` lists the queries whose plan costs more with the extension than without it, by true cardinalities.
