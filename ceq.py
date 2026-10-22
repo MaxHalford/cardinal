@@ -25,7 +25,7 @@ from sqlglot import exp
 
 ROOT = pathlib.Path(__file__).parent
 PATCHED = ROOT / "duckdb/build/release/duckdb"
-BASELINE = ROOT / "vendor/bin/duckdb-v1.5.6-baseline"
+BASELINE = ROOT / "vendor/bin/duckdb-v2.0.0-baseline"
 TIMEOUT = 600  # seconds per true count
 TRUTH_WORKERS = 4  # true counts run at once
 

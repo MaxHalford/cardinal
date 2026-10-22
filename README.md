@@ -26,8 +26,8 @@ The research tools need DuckDB patched to trace and inject estimates. The extens
 ```sh
 git submodule update --init
 (cd duckdb && make release)
-mkdir -p vendor/bin && cp duckdb/build/release/duckdb vendor/bin/duckdb-v1.5.6-baseline
-(cd duckdb && git apply ../patches/duckdb-v1.5.6-ce-trace.patch && make release)
+mkdir -p vendor/bin && cp duckdb/build/release/duckdb vendor/bin/duckdb-v2.0.0-baseline
+(cd duckdb && git apply ../patches/duckdb-v2.0.0-ce-trace.patch && make release)
 ```
 
 ## Benchmarks

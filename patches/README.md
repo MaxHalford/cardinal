@@ -1,15 +1,15 @@
 # Patches
 
-## `duckdb-v1.5.6-ce-trace.patch`
+## `duckdb-v2.0.0-ce-trace.patch`
 
-Applies to DuckDB v1.5.6 (commit 069cc9f). It logs every cardinality question that the join-order optimizer asks, as JSON lines, to the file named by `DUCKDB_CE_TRACE`. Logging does not change optimizer decisions. If the variable is not set, nothing is written.
+Applies to DuckDB v2.0.0 (commit d54cbbe). It logs every cardinality question that the join-order optimizer asks, as JSON lines, to the file named by `DUCKDB_CE_TRACE`. Logging does not change optimizer decisions. If the variable is not set, nothing is written.
 
 With `DUCKDB_CE_INJECT`, the optimizer reads estimates from that file instead of computing them, one per line: `<inv> <relation list> <estimate>`, e.g. `1 [0,2] 1234.5`. Questions missing from the file keep DuckDB's estimate. Invocation ids count from 1 per process: run one query per process. An injected base cardinality also enters DuckDB's join formula. Injected questions are logged with `"injected":true`.
 
 ```sh
 git clone https://github.com/duckdb/duckdb duckdb
-cd duckdb && git checkout v1.5.6
-git apply ../../patches/duckdb-v1.5.6-ce-trace.patch
+cd duckdb && git checkout v2.0.0
+git apply ../../patches/duckdb-v2.0.0-ce-trace.patch
 make release
 DUCKDB_CE_TRACE=trace.jsonl build/release/duckdb my.db -c "EXPLAIN SELECT ..."
 DUCKDB_CE_INJECT=estimates.txt DUCKDB_CE_TRACE=trace.jsonl build/release/duckdb my.db -c "EXPLAIN SELECT ..."
@@ -26,3 +26,11 @@ Events (one JSON object per line, `inv` = optimizer invocation id):
 | `plan` | The chosen join tree. |
 
 In SQL strings, a column is written `r<relation id>.<column>`. Columns of derived relations are written `r<id>.col_<table index>_<column index>`.
+
+v2.0.0 differences from the v1.5.6 trace:
+
+- A question's estimate is DuckDB's final one, after its OR-filter selectivities. Injection replaces that final estimate.
+- `tdom`: `hll` is the HLL or exact distinct count (`has_hll`), `no_hll` the min-max or row-count fallback otherwise.
+- Table filters are all expression filters in v2: `type` is `OPTIONAL_FILTER` or `EXPRESSION_FILTER`. Their SQL leaves out optional parts.
+- Relation columns add `source` (`HLL`, `EXACT`, `MIN_MAX`, `CARDINALITY`). Their names are DuckDB's, e.g. `SEQ_SCAN.kind`.
+- v2 keeps a FILTER above a scan even when its expression is also a graph filter. The trace lists it once, as a graph filter, as v1.5.6 did.
