@@ -1,0 +1,61 @@
+#
+# Daily: when DuckDB has a new release, opens a branch and a PR that move the extension to it,
+# then builds and checks the branch. A red check means the release needs a port, see
+# docs/upgrading.md.
+#
+name: DuckDB versions
+on:
+  schedule:
+    - cron: '0 6 * * *'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'A DuckDB release, e.g. v2.1.0. Empty: the latest.'
+        required: false
+
+permissions:
+  contents: write
+  pull-requests: write
+  actions: write
+
+jobs:
+  upgrade:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Move to the release
+        id: move
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          branch=$(scripts/upgrade_duckdb.sh ${{ inputs.version }})
+          echo "branch=$branch" >> "$GITHUB_OUTPUT"
+          if [ -n "$branch" ]; then
+            git push origin "$branch"
+          fi
+
+      # Pushes by this workflow's token start no workflow: dispatches do.
+      - name: Build and check the branch
+        if: steps.move.outputs.branch != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BRANCH: ${{ steps.move.outputs.branch }}
+        run: |
+          gh workflow run MainDistributionPipeline.yml --ref "$BRANCH"
+          gh workflow run Gate.yml --ref "$BRANCH"
+          gh pr create --base main --head "$BRANCH" --title "Upgrade to ${BRANCH#duckdb-}" --body "$(cat <<'EOF'
+          This PR moves the extension to a new DuckDB release.
+
+          - The `duckdb` and `extension-ci-tools` submodules point to the release.
+          - The version pins in CI, the gate and the research tools follow.
+
+          The checks build the extension on all platforms, run its tests, DuckDB's SQL tests and the stress test. If a check fails, the release needs a port: see `docs/upgrading.md`.
+
+          🤖 Generated with [Claude Code](https://claude.com/claude-code)
+          EOF
+          )"

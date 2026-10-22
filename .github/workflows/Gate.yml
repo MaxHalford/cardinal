@@ -1,0 +1,46 @@
+#
+# The upgrade gate: the extension's tests, DuckDB's SQL tests with the extension loaded, and the
+# concurrency stress test. See scripts/gate.py.
+#
+name: Gate
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'src/**'
+      - 'duckdb'
+      - 'extension-ci-tools'
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - name: Tools
+        run: sudo apt-get install -y ninja-build ccache
+
+      - uses: astral-sh/setup-uv@v6
+
+      # The release the extension pins: the stress test loads it into that DuckDB.
+      - name: Build
+        env:
+          GEN: ninja
+        run: |
+          export DUCKDB_VERSION=$(sed -n 's/.*duckdb_version: \(v[0-9.]*\).*/\1/p' .github/workflows/MainDistributionPipeline.yml | head -1)
+          make release
+
+      - name: Extension tests
+        run: ./build/release/test/unittest "test/*"
+
+      - name: DuckDB's SQL tests and the stress test
+        run: uv run scripts/gate.py all
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: gate
+          path: build/gate/*.json
