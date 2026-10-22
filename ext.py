@@ -109,7 +109,9 @@ def score(db, out, modes):
             if trees is None:
                 print(f"{q['query']}: invocations not found", file=sys.stderr)
                 continue
-            row = {"query": q["query"], "missing": 0, "plans": {inv: t for inv, (t, _) in trees.items()},
+            scored = plans.scorable({inv: t for inv, (t, _) in trees.items()}, q["query"], truth)
+            trees = {inv: trees[inv] for inv in scored}
+            row = {"query": q["query"], "missing": 0, "plans": scored,
                    "estimates": [{"inv": inv, "set": list(s), "est": est}
                                  for inv, (_, ests) in trees.items() for s, est in ests.items()]}
             for field, inner in (("cost", False), ("inner", True)):

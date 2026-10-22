@@ -161,6 +161,20 @@ def cost(tree, card, inner=False):
     return sum(card(tuple(n["set"])) for n in joins)
 
 
+def scorable(trees, query, truth):
+    """Invocations whose joins all have true counts: e.g. not the ones that join a subquery's
+    result, as in TPC-H. Every plan of an invocation joins its full set, so all plans agree."""
+    result = {}
+    for inv, tree in trees.items():
+        try:
+            if nodes(tree):
+                truth(query, inv, tuple(nodes(tree)[0]["set"]))
+        except ValueError:
+            continue
+        result[inv] = tree
+    return result
+
+
 class Truth:
     """True cardinalities: from the dataset, else counted and cached."""
 
@@ -208,7 +222,10 @@ def evaluate(db, queries, graphs, truth, inj, best=None):
                 raise RuntimeError(f"{q['query']} inv {e['inv']}: relations differ from the dataset")
 
         trees = {e["inv"]: e["tree"] for e in events if e["ev"] == "plan"}
-        row = {"query": q["query"], "missing": missing, "rounds": rounds, "plans": trees}
+        scored = scorable(trees, q["query"], truth)
+        row = {"query": q["query"], "missing": missing, "rounds": rounds, "plans": scored,
+               "skipped": len(trees) - len(scored)}
+        trees = scored
         for field, inner in (("cost", False), ("inner", True)):
             row[field] = sum(cost(t, lambda s, inv=inv: truth(q["query"], inv, s), inner) for inv, t in trees.items())
         if best is not None and best[q["query"]]["cost"]:
