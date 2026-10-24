@@ -119,8 +119,8 @@ void Model::AddSelectivity(const string &filters, double selectivity) const {
 	selectivities[filters] = selectivity;
 }
 
-double Model::Expectation(const Weights &weights) const {
-	// evidence[c]: some column in the subtree of c has weights. Children first.
+//! evidence[c]: some column in the subtree of c has weights. Children first.
+vector<bool> Model::Evidence(const Weights &weights) const {
 	vector<bool> evidence(columns.size(), false);
 	for (auto it = order.rbegin(); it != order.rend(); it++) {
 		auto i = *it;
@@ -129,6 +129,11 @@ double Model::Expectation(const Weights &weights) const {
 			evidence[columns[i].parent.GetIndex()] = true;
 		}
 	}
+	return evidence;
+}
+
+double Model::Expectation(const Weights &weights) const {
+	auto evidence = Evidence(weights);
 
 	double result = 1.0;
 	for (auto root : roots) {
@@ -143,6 +148,80 @@ double Model::Expectation(const Weights &weights) const {
 		result *= total;
 	}
 	return result;
+}
+
+//! The rest of the tree's belief about a column's states, for its marginal:
+//!
+//!   outside(c)[s] = Σ_t P(s | t) · weight(p)[t] · outside(p)[t] · Π_siblings messages(t)
+//!
+//! where p is the parent of c. A root's outside is its prior.
+vector<double> Model::Outside(idx_t column, const Weights &weights, const vector<bool> &evidence) const {
+	auto &col = columns[column];
+	vector<double> result(col.values.size(), 0.0);
+	if (!col.parent.IsValid()) {
+		for (auto &entry : col.probabilities) {
+			result[entry.state] += entry.p;
+		}
+		return result;
+	}
+
+	// The parent's belief without this column's subtree.
+	auto parent = col.parent.GetIndex();
+	auto &par = columns[parent];
+	auto term = Outside(parent, weights, evidence);
+	if (!weights[parent].empty()) {
+		for (idx_t t = 0; t < term.size(); t++) {
+			term[t] *= weights[parent][t];
+		}
+	}
+	for (auto sibling : par.children) {
+		if (sibling == column || !evidence[sibling]) {
+			continue;
+		}
+		auto belief = Belief(sibling, weights, evidence);
+		vector<double> message(par.values.size(), 0.0);
+		for (auto &entry : columns[sibling].probabilities) {
+			message[entry.parent_state] += entry.p * belief[entry.state];
+		}
+		for (idx_t t = 0; t < term.size(); t++) {
+			term[t] *= message[t];
+		}
+	}
+
+	for (auto &entry : col.probabilities) {
+		result[entry.state] += entry.p * term[entry.parent_state];
+	}
+	return result;
+}
+
+vector<double> Model::Marginal(idx_t column, const Weights &weights) const {
+	auto evidence = Evidence(weights);
+	// The column's subtree, and the rest of its tree.
+	auto down = Belief(column, weights, evidence);
+	auto outside = Outside(column, weights, evidence);
+	for (idx_t s = 0; s < down.size(); s++) {
+		down[s] *= outside[s];
+	}
+
+	// Other trees are independent: their expectations scale every state alike.
+	auto root = column;
+	while (columns[root].parent.IsValid()) {
+		root = columns[root].parent.GetIndex();
+	}
+	for (auto other : roots) {
+		if (other == root || !evidence[other]) {
+			continue;
+		}
+		auto belief = Belief(other, weights, evidence);
+		double total = 0.0;
+		for (auto &entry : columns[other].probabilities) {
+			total += entry.p * belief[entry.state];
+		}
+		for (auto &value : down) {
+			value *= total;
+		}
+	}
+	return down;
 }
 
 } // namespace cardinal

@@ -1,0 +1,40 @@
+# name: test/sql/cardinal_values.test
+# description: joins on columns that are no key, e.g. d1.week = d2.week, are estimated through their values
+# group: [sql]
+
+require cardinal
+
+statement ok
+SET cardinal_background = false;
+
+# 700 days, 100 weeks of 7 days, years of 350 days.
+statement ok
+CREATE TABLE day (id INTEGER PRIMARY KEY, week INTEGER, year INTEGER);
+
+statement ok
+INSERT INTO day SELECT range, range // 7, range // 350 FROM range(700);
+
+# Stock: 100 rows per day of the first year, 1 per day of the second.
+statement ok
+CREATE TABLE stock AS SELECT CASE WHEN range < 35000 THEN range // 100 ELSE 350 + (range - 35000) END AS day_id
+FROM range(35350);
+
+query I
+SELECT count(*) FROM stock s, day d2, day d1 WHERE s.day_id = d2.id AND d1.week = d2.week AND d1.year = 0;
+----
+245000
+
+# Weeks are within a year: days of year 0 and of year 1 share none. DuckDB alone guesses
+# 350 x 350 / 100 = 1,225.
+query II
+EXPLAIN SELECT count(*) FROM day d1, day d2 WHERE d1.week = d2.week AND d1.year = 0 AND d2.year = 1;
+----
+physical_plan	<REGEX>:.*Hash Join.*~1 row[^s].*
+
+# Days of year 0 join the 7 days of their week: stock of year 0, 7 times. DuckDB alone guesses
+# about 120,000: it does not see that stock is mostly in year 0. Cardinal's estimate is exact,
+# DuckDB's formula reproduces it only in part: one distinct count per join cannot hold both.
+query II
+EXPLAIN SELECT count(*) FROM stock s, day d2, day d1 WHERE s.day_id = d2.id AND d1.week = d2.week AND d1.year = 0;
+----
+physical_plan	<REGEX>:.*Hash Join.*~(1[5-9]|2[0-9])[0-9],[0-9]{3} rows.*

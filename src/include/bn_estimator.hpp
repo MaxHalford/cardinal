@@ -25,15 +25,23 @@ using Powers = map<idx_t, idx_t>;
 bool PrepareFilters(LogicalGet &get, const vector<unique_ptr<Expression>> &filters, const Model &model,
                     PreparedFilters &out);
 
-//! E[1(filters) · Π F^k] under the model. False when a filter is out of reach.
-bool Expect(ClientContext &context, const Model &model, const PreparedFilters &filters, const Powers &powers,
-            double &result);
+//! Extra weights per state of some columns: model column -> weight of each state. e.g. the
+//! rows of another table that join each value.
+using StateWeights = map<idx_t, vector<double>>;
 
-//! The table columns the scan's filters read: its table filters and the filters above it.
+//! E[1(filters) · Π F^k · Π state weights] under the model. False when a filter is out of reach.
+bool Expect(ClientContext &context, const Model &model, const PreparedFilters &filters, const Powers &powers,
+            double &result, const StateWeights *state_weights = nullptr);
+
+//! The same expectation, split over the states of a column: E[1(column = s) · ...] for each s.
+bool ExpectByState(ClientContext &context, const Model &model, const PreparedFilters &filters, const Powers &powers,
+                   idx_t column, vector<double> &result, const StateWeights *state_weights = nullptr);
+
 //! The filter without its optional parts, e.g. x > 5 AND optional(...) -> x > 5.
 //! Null when internal filter functions remain: they have no SQL form, nor run on model states.
 unique_ptr<Expression> RequiredPart(const Expression &expr);
 
+//! The table columns the scan's filters read: its table filters and the filters above it.
 vector<string> FilteredColumns(LogicalGet &get, const vector<unique_ptr<Expression>> &filters);
 
 //! Rows of a scan that pass its filters, by the table's model: rows x P(filters).

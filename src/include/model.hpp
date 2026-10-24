@@ -82,6 +82,9 @@ public:
 
 	//! E[Π weights]: e.g. the share of rows that pass filters, with 0/1 weights.
 	double Expectation(const Weights &weights) const;
+	//! E[1(column = s) Π weights] for each state s of the column: the expectation split over
+	//! the column's states. It sums to Expectation(weights).
+	vector<double> Marginal(idx_t column, const Weights &weights) const;
 
 	//! Selectivities already estimated, by filter text. Planning asks again and again.
 	bool FindSelectivity(const string &filters, double &selectivity) const;
@@ -89,6 +92,8 @@ public:
 
 private:
 	vector<double> Belief(idx_t column, const Weights &weights, const vector<bool> &evidence) const;
+	vector<double> Outside(idx_t column, const Weights &weights, const vector<bool> &evidence) const;
+	vector<bool> Evidence(const Weights &weights) const;
 
 	idx_t rows;
 	vector<ModelColumn> columns;

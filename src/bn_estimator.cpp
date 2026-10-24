@@ -272,8 +272,10 @@ static vector<double> ColumnWeights(ClientContext &context, const vector<const E
 //! Column weights already computed in this estimate, by column and predicates.
 using WeightCache = map<pair<idx_t, vector<const Expression *>>, vector<double>>;
 
-static double TermProbability(ClientContext &context, const Model &model, const Term &term,
-                              const vector<LogicalType> &types, const Weights &extra, WeightCache &cache) {
+//! E[1(term) w]: a scalar, or split over the states of column by.
+static vector<double> TermExpectation(ClientContext &context, const Model &model, const Term &term,
+                                      const vector<LogicalType> &types, const Weights &extra, WeightCache &cache,
+                                      optional_idx by) {
 	Weights weights = extra;
 	for (auto &entry : term) {
 		auto key = make_pair(entry.first, entry.second);
@@ -291,13 +293,16 @@ static double TermProbability(ClientContext &context, const Model &model, const 
 			column[s] *= hit->second[s];
 		}
 	}
-	return model.Expectation(weights);
+	if (by.IsValid()) {
+		return model.Marginal(by.GetIndex(), weights);
+	}
+	return {model.Expectation(weights)};
 }
 
 //! E[1(t1 or t2 or ...) w] = Σ over non-empty subsets S of (-1)^(|S|+1) E[1(AND of S) w].
-static double UnionExpectation(ClientContext &context, const Model &model, const vector<Term> &terms,
-                               const vector<LogicalType> &types, const Weights &extra) {
-	double total = 0;
+static vector<double> UnionExpectation(ClientContext &context, const Model &model, const vector<Term> &terms,
+                                       const vector<LogicalType> &types, const Weights &extra, optional_idx by) {
+	vector<double> total(by.IsValid() ? model.Columns()[by.GetIndex()].values.size() : 1, 0.0);
 	WeightCache cache;
 	for (idx_t mask = 1; mask < (idx_t(1) << terms.size()); mask++) {
 		vector<Term> subset = {Term()};
@@ -309,7 +314,10 @@ static double UnionExpectation(ClientContext &context, const Model &model, const
 			}
 		}
 		auto sign = size % 2 == 1 ? 1.0 : -1.0;
-		total += sign * TermProbability(context, model, subset[0], types, extra, cache);
+		auto part = TermExpectation(context, model, subset[0], types, extra, cache, by);
+		for (idx_t s = 0; s < total.size(); s++) {
+			total[s] += sign * part[s];
+		}
 	}
 	return total;
 }
@@ -397,23 +405,28 @@ bool PrepareFilters(LogicalGet &get, const vector<unique_ptr<Expression>> &filte
 	return true;
 }
 
-bool Expect(ClientContext &context, const Model &model, const PreparedFilters &filters, const Powers &powers,
-            double &result) {
-	// e.g. "(#2 >= 5) | #6^2"
-	auto key = filters.key + " |";
-	for (auto &entry : powers) {
-		key += " #" + to_string(entry.first) + "^" + to_string(entry.second);
-	}
-	if (model.FindSelectivity(key, result)) {
-		return true;
-	}
-
+//! E[1(filters) Π F^k Π state weights], a scalar or split over the states of column by.
+static bool ExpectTerms(ClientContext &context, const Model &model, const PreparedFilters &filters,
+                        const Powers &powers, const StateWeights *state_weights, optional_idx by,
+                        vector<double> &result) {
 	// Fanout weights: a bin weighs its mean count to the power.
 	Weights extra(model.Columns().size());
 	for (auto &entry : powers) {
 		auto &column = model.Columns()[entry.first];
 		for (auto &value : column.values) {
 			extra[entry.first].push_back(std::pow(value.GetValue<double>(), double(entry.second)));
+		}
+	}
+	if (state_weights) {
+		for (auto &entry : *state_weights) {
+			auto &column = extra[entry.first];
+			if (column.empty()) {
+				column = entry.second;
+				continue;
+			}
+			for (idx_t s = 0; s < column.size(); s++) {
+				column[s] *= entry.second[s];
+			}
 		}
 	}
 
@@ -428,10 +441,38 @@ bool Expect(ClientContext &context, const Model &model, const PreparedFilters &f
 			return false;
 		}
 	}
-
-	result = MaxValue(UnionExpectation(context, model, terms, filters.types, extra), 0.0);
-	model.AddSelectivity(key, result);
+	result = UnionExpectation(context, model, terms, filters.types, extra, by);
+	for (auto &value : result) {
+		value = MaxValue(value, 0.0);
+	}
 	return true;
+}
+
+bool Expect(ClientContext &context, const Model &model, const PreparedFilters &filters, const Powers &powers,
+            double &result, const StateWeights *state_weights) {
+	// e.g. "(#2 >= 5) | #6^2". Not with state weights: they are not part of the key.
+	auto key = filters.key + " |";
+	for (auto &entry : powers) {
+		key += " #" + to_string(entry.first) + "^" + to_string(entry.second);
+	}
+	bool cached = !state_weights || state_weights->empty();
+	if (cached && model.FindSelectivity(key, result)) {
+		return true;
+	}
+	vector<double> total;
+	if (!ExpectTerms(context, model, filters, powers, state_weights, optional_idx(), total)) {
+		return false;
+	}
+	result = total[0];
+	if (cached) {
+		model.AddSelectivity(key, result);
+	}
+	return true;
+}
+
+bool ExpectByState(ClientContext &context, const Model &model, const PreparedFilters &filters, const Powers &powers,
+                   idx_t column, vector<double> &result, const StateWeights *state_weights) {
+	return ExpectTerms(context, model, filters, powers, state_weights, column, result);
 }
 
 vector<string> FilteredColumns(LogicalGet &get, const vector<unique_ptr<Expression>> &filters) {

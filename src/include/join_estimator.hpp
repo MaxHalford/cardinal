@@ -90,12 +90,25 @@ private:
 		optional_idx d;
 		//! Foreign-key relation -> its column in the class.
 		map<idx_t, string> fks;
+		//! No key: its relations join through their values, e.g. d1.week = d2.week.
+		bool values = false;
 	};
 
 	double Weight(idx_t r, const Class *parent);
 	double Average(const Class &c, idx_t r);
 	void Members(const Class &c, optional_idx skip, map<string, idx_t> &powers, double &scalar);
-	double ExpectOn(const Model *model, const PreparedFilters *filters, const map<string, idx_t> &powers);
+	double ExpectOn(const Model *model, const PreparedFilters *filters, const map<string, idx_t> &powers,
+	                const StateWeights *state_weights = nullptr);
+	vector<double> ExpectByStateOn(const Model *model, const PreparedFilters *filters,
+	                               const map<string, idx_t> &powers, idx_t column, const StateWeights *state_weights);
+	//! Weights on r's columns from its value classes except parent: the rows joining each value.
+	StateWeights ValueWeights(idx_t r, const Class *parent);
+	//! Rows of m's subtree away from class c, by state of m's column in c.
+	vector<double> Mass(idx_t m, const Class &c);
+	//! Masses by state of one column, moved onto the states of another column through their values.
+	vector<double> MapStates(const vector<double> &mass, const ModelColumn &from, const ModelColumn &to);
+	vector<double> RelationExpectByState(idx_t r, const map<string, idx_t> &powers, idx_t column,
+	                                     const StateWeights *state_weights);
 	const Model *DomainModel(const Class &c);
 	idx_t DomainRows(const Class &c);
 
@@ -125,12 +138,14 @@ private:
 	//! A relation's filters with the keys of the dimensions folded into it, if any.
 	const PreparedFilters &FiltersOf(idx_t r);
 	//! E_r[1(f_r) · Π F^k], given r's foreign keys in the set are not NULL.
-	double RelationExpect(idx_t r, const map<string, idx_t> &powers);
+	double RelationExpect(idx_t r, const map<string, idx_t> &powers, const StateWeights *state_weights = nullptr);
 
 	//! The set being estimated.
 	vector<Class> classes;
 	map<idx_t, const Class *> domain_of;
 	map<idx_t, vector<const Class *>> fk_of;
+	//! Value classes of each relation.
+	map<idx_t, vector<const Class *>> value_of;
 	//! Folded classes, and the filters of their foreign-key relations.
 	set<idx_t> folded;
 	map<idx_t, const PreparedFilters *> folded_filters;

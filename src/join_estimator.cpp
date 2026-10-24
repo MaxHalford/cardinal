@@ -323,6 +323,7 @@ bool JoinEstimator::EstimateWith(uint64_t set, const Branch &conditions, double 
 	classes.clear();
 	domain_of.clear();
 	fk_of.clear();
+	value_of.clear();
 	idx_t links = 0;
 	vector<pair<idx_t, idx_t>> pairs;
 	for (idx_t id = 0; id < graph.classes.size(); id++) {
@@ -345,11 +346,18 @@ bool JoinEstimator::EstimateWith(uint64_t set, const Branch &conditions, double 
 		if (members.size() < 2) {
 			continue;
 		}
-		if (!domains[id].known) {
-			return false;
-		}
 		Class c;
 		c.id = id;
+		// No key: the members join through their values, which their models must cover.
+		if (!domains[id].known) {
+			for (auto &member : members) {
+				auto &model = relations[member.first].model;
+				if (!model || !model->Find(member.second).IsValid()) {
+					return false;
+				}
+			}
+			c.values = true;
+		}
 		auto d = domains[id].relation;
 		if (d.IsValid() && members.count(d.GetIndex())) {
 			c.d = d;
@@ -367,6 +375,12 @@ bool JoinEstimator::EstimateWith(uint64_t set, const Branch &conditions, double 
 		return false;
 	}
 	for (auto &c : classes) {
+		if (c.values) {
+			for (auto &member : c.fks) {
+				value_of[member.first].push_back(&c);
+			}
+			continue;
+		}
 		if (c.d.IsValid()) {
 			domain_of[c.d.GetIndex()] = &c;
 		}
@@ -381,7 +395,8 @@ bool JoinEstimator::EstimateWith(uint64_t set, const Branch &conditions, double 
 	map<idx_t, vector<const Class *>> folds;
 	for (auto &c : classes) {
 		auto &domain = domains[c.id];
-		if (!c.d.IsValid() || c.fks.size() != 1 || !fk_of[c.d.GetIndex()].empty() || !FoldKeys(c)) {
+		if (!c.d.IsValid() || c.fks.size() != 1 || !fk_of[c.d.GetIndex()].empty() ||
+		    !value_of[c.d.GetIndex()].empty() || !FoldKeys(c)) {
 			continue;
 		}
 		auto r = c.fks.begin()->first;
@@ -520,10 +535,11 @@ JoinEstimator::RelationFilters JoinEstimator::BuildFilters(idx_t r, const vector
 	return result;
 }
 
-double JoinEstimator::ExpectOn(const Model *model, const PreparedFilters *filters, const map<string, idx_t> &powers) {
+double JoinEstimator::ExpectOn(const Model *model, const PreparedFilters *filters, const map<string, idx_t> &powers,
+                               const StateWeights *state_weights) {
 	bool filtered = filters && !filters->filters.empty();
 	if (!model) {
-		if (filtered || !powers.empty()) {
+		if (filtered || !powers.empty() || (state_weights && !state_weights->empty())) {
 			throw Unsupported();
 		}
 		return 1.0;
@@ -539,7 +555,29 @@ double JoinEstimator::ExpectOn(const Model *model, const PreparedFilters *filter
 	// No filters: no predicate reads the types.
 	static const PreparedFilters none;
 	double result;
-	if (!Expect(context, *model, filters ? *filters : none, columns, result)) {
+	if (!Expect(context, *model, filters ? *filters : none, columns, result, state_weights)) {
+		throw Unsupported();
+	}
+	return result;
+}
+
+vector<double> JoinEstimator::ExpectByStateOn(const Model *model, const PreparedFilters *filters,
+                                              const map<string, idx_t> &powers, idx_t column,
+                                              const StateWeights *state_weights) {
+	if (!model) {
+		throw Unsupported();
+	}
+	Powers columns;
+	for (auto &entry : powers) {
+		auto index = model->Find(entry.first);
+		if (!index.IsValid()) {
+			throw Unsupported();
+		}
+		columns[index.GetIndex()] = entry.second;
+	}
+	static const PreparedFilters none;
+	vector<double> result;
+	if (!ExpectByState(context, *model, filters ? *filters : none, columns, column, result, state_weights)) {
 		throw Unsupported();
 	}
 	return result;
@@ -569,19 +607,138 @@ double JoinEstimator::Weight(idx_t r, const Class *parent) {
 			scalar *= Average(*c, r);
 		}
 	}
-	return RelationExpect(r, powers) * scalar;
+	auto values = ValueWeights(r, parent);
+	return RelationExpect(r, powers, &values) * scalar;
 }
 
-double JoinEstimator::RelationExpect(idx_t r, const map<string, idx_t> &powers) {
+//! For a value class c of r, each state v of r's column weighs the rows that join v in the
+//! other members' subtrees: Π_m rows(m) · mass_m(v). e.g. a day of d2 weighs the days of d1
+//! in its week that pass d1's filters.
+StateWeights JoinEstimator::ValueWeights(idx_t r, const Class *parent) {
+	StateWeights result;
+	auto &model = *relations[r].model;
+	for (auto c : value_of[r]) {
+		if (c == parent) {
+			continue;
+		}
+		auto column = model.Find(c->fks.at(r)).GetIndex();
+		auto &to = model.Columns()[column];
+		vector<double> weights(to.values.size(), 1.0);
+		for (auto &member : c->fks) {
+			if (member.first == r) {
+				continue;
+			}
+			auto &other = *relations[member.first].model;
+			auto &from = other.Columns()[other.Find(member.second).GetIndex()];
+			auto mass = MapStates(Mass(member.first, *c), from, to);
+			for (idx_t s = 0; s < weights.size(); s++) {
+				weights[s] *= double(relations[member.first].rows) * mass[s];
+			}
+		}
+		auto &target = result[column];
+		if (target.empty()) {
+			target = std::move(weights);
+		} else {
+			for (idx_t s = 0; s < target.size(); s++) {
+				target[s] *= weights[s];
+			}
+		}
+	}
+	return result;
+}
+
+//! As Weight, split over the states of m's column in value class c.
+vector<double> JoinEstimator::Mass(idx_t m, const Class &c) {
+	map<string, idx_t> powers;
+	double scalar = 1.0;
+	auto dom = domain_of.find(m);
+	if (dom != domain_of.end()) {
+		Members(*dom->second, optional_idx(), powers, scalar);
+	}
+	for (auto other : fk_of[m]) {
+		scalar *= Average(*other, m);
+	}
+	auto values = ValueWeights(m, &c);
+	auto column = relations[m].model->Find(c.fks.at(m)).GetIndex();
+	auto mass = RelationExpectByState(m, powers, column, &values);
+	for (auto &value : mass) {
+		value *= scalar;
+	}
+	return mass;
+}
+
+//! Moves masses from the states of one column to those of another, by value. A kept value
+//! of one may fall in the other's OTHER, which holds members values evenly; NULL joins nothing.
+//! e.g. from week 7 kept with mass 0.01 to week 7 in OTHER: 0.01, as OTHER's states.
+vector<double> JoinEstimator::MapStates(const vector<double> &mass, const ModelColumn &from, const ModelColumn &to) {
+	unordered_map<string, double> kept;
+	double other = 0;
+	for (idx_t s = 0; s < from.values.size(); s++) {
+		if (from.kinds[s] == StateKind::VALUE) {
+			kept[from.values[s].ToString()] = mass[s];
+		} else if (from.kinds[s] == StateKind::OTHER) {
+			other = mass[s];
+		}
+	}
+	// A value in from's OTHER: its share of the OTHER mass.
+	double per_other = from.members.IsValid() ? other / double(from.members.GetIndex()) : 0;
+
+	vector<double> result(to.values.size(), 0.0);
+	unordered_set<string> to_kept;
+	for (idx_t s = 0; s < to.values.size(); s++) {
+		if (to.kinds[s] != StateKind::VALUE) {
+			continue;
+		}
+		auto key = to.values[s].ToString();
+		to_kept.insert(key);
+		auto hit = kept.find(key);
+		result[s] = hit != kept.end() ? hit->second : per_other;
+	}
+	// to's OTHER holds its members values, each as likely: their average mass. Those kept by
+	// from come with their own mass, the rest with from's OTHER share.
+	for (idx_t s = 0; s < to.values.size(); s++) {
+		if (to.kinds[s] != StateKind::OTHER || !to.members.IsValid()) {
+			continue;
+		}
+		double total = 0;
+		idx_t matched = 0;
+		for (auto &entry : kept) {
+			if (!to_kept.count(entry.first)) {
+				total += entry.second;
+				matched++;
+			}
+		}
+		auto members = to.members.GetIndex();
+		total += double(members > matched ? members - matched : 0) * per_other;
+		result[s] = total / double(members);
+	}
+	return result;
+}
+
+double JoinEstimator::RelationExpect(idx_t r, const map<string, idx_t> &powers, const StateWeights *state_weights) {
 	auto keyed = keyed_filters.find(r);
 	if (keyed == keyed_filters.end()) {
-		return ExpectOn(relations[r].model.get(), &FiltersOf(r), powers);
+		return ExpectOn(relations[r].model.get(), &FiltersOf(r), powers, state_weights);
 	}
 	auto keys = ExpectOn(relations[r].model.get(), key_filters[r], {});
 	if (keys <= 0) {
 		return 0;
 	}
-	return ExpectOn(relations[r].model.get(), keyed->second, powers) / keys;
+	return ExpectOn(relations[r].model.get(), keyed->second, powers, state_weights) / keys;
+}
+
+vector<double> JoinEstimator::RelationExpectByState(idx_t r, const map<string, idx_t> &powers, idx_t column,
+                                                    const StateWeights *state_weights) {
+	auto keyed = keyed_filters.find(r);
+	if (keyed == keyed_filters.end()) {
+		return ExpectByStateOn(relations[r].model.get(), &FiltersOf(r), powers, column, state_weights);
+	}
+	auto keys = ExpectOn(relations[r].model.get(), key_filters[r], {});
+	auto mass = ExpectByStateOn(relations[r].model.get(), keyed->second, powers, column, state_weights);
+	for (auto &value : mass) {
+		value = keys > 0 ? value / keys : 0;
+	}
+	return mass;
 }
 
 const PreparedFilters &JoinEstimator::FiltersOf(idx_t r) {
@@ -638,7 +795,8 @@ double JoinEstimator::Average(const Class &c, idx_t r) {
 		for (auto other : fk_of[d]) {
 			scalar *= Average(*other, d);
 		}
-		e = RelationExpect(d, powers);
+		auto values = ValueWeights(d, &c);
+		e = RelationExpect(d, powers, &values);
 	} else {
 		e = ExpectOn(DomainModel(c), nullptr, powers);
 	}
