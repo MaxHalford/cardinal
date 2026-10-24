@@ -20,8 +20,8 @@ The same queries, with DuckDB v2.0.0 alone and with cardinal, on five standard b
 | [STATS-CEB](https://github.com/Nathaniel-Han/End-to-End-CardEst-Benchmark) | 146 | **130 s → 67 s** | 42 / 2 | 23× → 1.9× |
 | [JOB](https://github.com/gregrahn/join-order-benchmark) | 113 | 3.5 s → 2.9 s | 29 / 10 | 19× → 2.2× |
 | [JOB-light](https://github.com/andreaskipf/learnedcardinalities) | 70 | 5.0 s → 4.8 s | 7 / 2 | 5.3× → 1.5× |
-| [DSB](https://github.com/microsoft/dsb), scale factor 10 | 219 | 2.3 s → 2.7 s | 0 / 19 | 4.1× → 2.1× |
-| TPC-H, scale factor 10 | 22 | 1.3 s → 1.3 s | 0 / 0 | 1.3× → 1.0× |
+| [DSB](https://github.com/microsoft/dsb), scale factor 10 | 219 | 2.5 s → 2.7 s | 0 / 23 | 4.1× → 2.2× |
+| TPC-H, scale factor 10 | 22 | 1.4 s → 1.3 s | 0 / 0 | 1.3× → 1.0× |
 
 - **Total time**: the whole workload, each query's median over several runs. Planning time included.
 - **Faster / slower**: queries whose time changes by more than 10% and 10 ms.
