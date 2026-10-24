@@ -20,6 +20,9 @@ namespace cardinal {
 //! Connected sets fitted at most, smallest first.
 static constexpr idx_t MAX_SETS = 2000;
 
+//! Share of a query's joins cardinal must estimate to plan it. Below, DuckDB plans alone.
+static constexpr double MIN_COVERAGE = 0.5;
+
 //! A filtered domain with at most this many rows is read: its passing keys fold into the join.
 static constexpr idx_t MAX_DIMENSION_ROWS = 10000;
 
@@ -358,20 +361,24 @@ JoinTargets PlanJoins(ClientContext &context, Optimizer &optimizer, LogicalOpera
 	JoinEstimator estimator(context, graph, std::move(relations), std::move(domains));
 	vector<uint64_t> sets;
 	vector<double> y;
-	idx_t joins = 0;
+	idx_t joins = 0, estimated = 0;
 	for (auto set : ConnectedSets(graph)) {
 		double card;
 		if (RelationCount(set) == 1) {
 			card = base[CountZeros<uint64_t>::Trailing(set)];
-		} else if (!estimator.Estimate(set, card)) {
-			continue;
 		} else {
 			joins++;
+			if (!estimator.Estimate(set, card)) {
+				continue;
+			}
+			estimated++;
 		}
 		sets.push_back(set);
 		y.push_back(std::log(MaxValue(card, 1.0)));
 	}
-	if (joins == 0) {
+	// Mostly out of reach, e.g. joins in a cycle: DuckDB's formula would fill the rest from
+	// cardinal's numbers, which they were not fitted for. DuckDB plans alone.
+	if (double(estimated) < MIN_COVERAGE * double(joins)) {
 		return HandsOff();
 	}
 

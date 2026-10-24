@@ -1,0 +1,33 @@
+# name: test/sql/cardinal_coverage.test
+# description: a query whose joins cardinal mostly cannot estimate is left to DuckDB
+# group: [sql]
+
+require cardinal
+
+statement ok
+SET cardinal_background = false;
+
+statement ok
+CREATE TABLE a (id INTEGER PRIMARY KEY, x INTEGER);
+
+statement ok
+INSERT INTO a SELECT range, range % 100 FROM range(1000);
+
+statement ok
+CREATE TABLE b (id INTEGER PRIMARY KEY, a_id INTEGER, y INTEGER);
+
+statement ok
+INSERT INTO b SELECT range, range % 1000, range % 50 FROM range(20000);
+
+statement ok
+CREATE TABLE c (b_id INTEGER, z INTEGER);
+
+statement ok
+INSERT INTO c SELECT range % 20000, range % 7 FROM range(100000);
+
+# a.x < b.y is out of cardinal's reach: of the joins {a, b}, {b, c} and {a, b, c}, it estimates
+# only {b, c}. DuckDB plans alone, with its own estimates.
+query II
+EXPLAIN SELECT count(*) FROM a, b, c WHERE a.id = b.a_id AND b.id = c.b_id AND a.x < b.y AND c.z = 3;
+----
+physical_plan	<REGEX>:.*Hash Join.*~3,873 rows.*
