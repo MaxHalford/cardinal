@@ -106,8 +106,7 @@ static vector<JoinDomain> Domains(ClientContext &context, const QueryGraph &grap
 		// Known key or not, the models cover the columns: without a key, the relations join
 		// through these columns' values.
 		for (auto &column : graph.classes[c]) {
-			AddFilterColumns(context, *graph.relations[column.first].get.get().GetTable(),
-			                 {ColumnName(graph, column)});
+			AddFilterColumns(context, *graph.relations[column.first].get.get().GetTable(), {ColumnName(graph, column)});
 		}
 	}
 	return domains;

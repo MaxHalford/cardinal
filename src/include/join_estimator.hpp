@@ -99,8 +99,8 @@ private:
 	void Members(const Class &c, optional_idx skip, map<string, idx_t> &powers, double &scalar);
 	double ExpectOn(const Model *model, const PreparedFilters *filters, const map<string, idx_t> &powers,
 	                const StateWeights *state_weights = nullptr);
-	vector<double> ExpectByStateOn(const Model *model, const PreparedFilters *filters,
-	                               const map<string, idx_t> &powers, idx_t column, const StateWeights *state_weights);
+	vector<double> ExpectByStateOn(const Model *model, const PreparedFilters *filters, const map<string, idx_t> &powers,
+	                               idx_t column, const StateWeights *state_weights);
 	//! Weights on r's columns from its value classes except parent: the rows joining each value.
 	StateWeights ValueWeights(idx_t r, const Class *parent);
 	//! Rows of m's subtree away from class c, by state of m's column in c.
