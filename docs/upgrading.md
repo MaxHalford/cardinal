@@ -11,7 +11,7 @@ git -C extension-ci-tools fetch origin v2.0-cyanoptera   # the branch for that r
 git -C extension-ci-tools checkout FETCH_HEAD
 ```
 
-Set the Python package to the same version in `pyproject.toml` (`duckdb==2.0.0`), then `uv lock && uv sync`.
+Set the Python package to the same version in `research/pyproject.toml` (`duckdb==2.0.0`), then `uv lock && uv sync` there.
 
 ## 2. Build and port
 
