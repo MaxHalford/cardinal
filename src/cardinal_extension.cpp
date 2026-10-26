@@ -40,11 +40,12 @@ static void PostOptimize(OptimizerExtensionInput &input, unique_ptr<LogicalOpera
 
 static void LoadInternal(ExtensionLoader &loader) {
 	auto &config = DBConfig::GetConfig(loader.GetDatabaseInstance());
-	config.AddExtensionOption(ESTIMATOR_SETTING, "Estimates given to the optimizer: fanout (scans and joins) or off",
-	                          LogicalType::VARCHAR, Value("fanout"));
+	config.AddExtensionOption(ESTIMATOR_SETTING, "Cardinal's estimates for the optimizer: on or off",
+	                          LogicalType::VARCHAR, Value("on"), CheckEstimator);
 	config.AddExtensionOption(SAVE_SETTING, "Save fitted models in the store", LogicalType::BOOLEAN,
 	                          Value::BOOLEAN(true));
-	config.AddExtensionOption(STORE_SETTING, "The store's file: ~/.duckdb/extension_data/cardinal/cardinal.db if empty",
+	config.AddExtensionOption(STORE_SETTING,
+	                          "The models' file. Empty: ~/.duckdb/extension_data/cardinal/<DuckDB version>/store-2.db",
 	                          LogicalType::VARCHAR, Value(""));
 	config.AddExtensionOption(BACKGROUND_SETTING,
 	                          "Fit models on a worker thread: queries plan with what there is meanwhile",

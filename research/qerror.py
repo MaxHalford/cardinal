@@ -2,7 +2,7 @@
 
     uv run qerror.py <out> ...
 
-Reads <out>/plans/cardinal_off.jsonl and cardinal_fanout.jsonl (ext.py plans), and
+Reads <out>/plans/cardinal_off.jsonl and cardinal_on.jsonl (ext.py plans), and
 the true counts of <out>/questions.jsonl. Compares, per relation set DuckDB asked
 about in both modes, q-error = max(estimate / true, true / estimate), both at least 1.
 """
@@ -44,7 +44,7 @@ def report(out):
     out = pathlib.Path(out)
     truth = {(q["query"], q["inv"], tuple(q["set"])): q["true"] for q in read(out / "questions.jsonl")
              if q["status"] == "ok" and q["true"] is not None}
-    off, fanout = estimates(out / "plans/cardinal_off.jsonl"), estimates(out / "plans/cardinal_fanout.jsonl")
+    off, fanout = estimates(out / "plans/cardinal_off.jsonl"), estimates(out / "plans/cardinal_on.jsonl")
     keys = sorted(off.keys() & fanout.keys() & truth.keys())
 
     groups = collections.defaultdict(lambda: ([], []))

@@ -2,6 +2,7 @@
 
 #include "join_planner.hpp"
 
+#include "duckdb/main/setting_info.hpp"
 #include "duckdb/planner/logical_operator.hpp"
 
 namespace duckdb {
@@ -13,10 +14,13 @@ namespace cardinal {
 //!   FANOUT   scans and joins: table models with fanouts, fitted to DuckDB's join formula
 enum class Estimator { OFF, EXACT, BN, FANOUT };
 
-//! Setting that picks the estimator, e.g. SET cardinal_estimator = 'exact'.
+//! Setting that picks the estimator: 'on' (FANOUT), 'off', 'bn' or 'exact'.
 static constexpr const char *ESTIMATOR_SETTING = "cardinal_estimator";
 
 Estimator CurrentEstimator(ClientContext &context);
+
+//! Rejects a value of the setting that names no estimator, e.g. a typo.
+void CheckEstimator(ClientContext &context, SetScope scope, Value &parameter);
 
 //! Start an optimizer run: attach the hooks to every DuckDB table scan in the plan.
 void AttachScanHooks(LogicalOperator &op);

@@ -9,7 +9,7 @@ and keys in the benchmark's store, <out>/cardinal.db. Later sessions start
 from them, as a user's would.
 
 plans: P-error of the plans DuckDB picks with the extension in each mode
-(off, bn, fanout), costed with true cardinalities like plans.py. Each query
+(off, bn, on), costed with true cardinalities like plans.py. Each query
 is planned twice in one traced process: the second plan is scored. The
 extension's own work also shows in the trace: its queries, and the join
 orders it compares on copies of the plan before DuckDB plans. So the dataset's
@@ -41,7 +41,7 @@ def settings(out):
 def warmup(db, out):
     queries = read_jsonl(pathlib.Path(out) / "queries.jsonl")
     (pathlib.Path(out) / "cardinal.db").unlink(missing_ok=True)
-    script = f"{settings(out)}\nSET cardinal_estimator = 'fanout';\n"
+    script = f"{settings(out)}\nSET cardinal_estimator = 'on';\n"
     script += "\n".join("EXPLAIN " + q["sql"].rstrip().rstrip(";") + ";" for q in queries)
     script += "\nSELECT count(*), round(sum(seconds), 2) FROM cardinal_fit_eager();\n"
     script += "SELECT count(*) FROM cardinal_models();\n"

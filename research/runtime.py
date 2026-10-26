@@ -10,7 +10,7 @@ Writes <out>/runtime/<estimator>.jsonl and prints totals and speedups
 over the first estimator.
 
 Estimators named cardinal_<mode> run the cardinal extension instead, with
-SET cardinal_estimator = '<mode>' (e.g. cardinal_off, cardinal_fanout), and
+SET cardinal_estimator = '<mode>' (e.g. cardinal_off, cardinal_on), and
 the store ext.py warmup filled: nothing injected. An EXPLAIN first loads the
 models, outside the timed run.
 

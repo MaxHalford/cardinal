@@ -39,10 +39,10 @@ uv run plans.py $db $out duckdb true
 
 # The extension, against DuckDB alone.
 uv run ext.py warmup $db $out
-uv run ext.py plans $db $out off fanout
+uv run ext.py plans $db $out off on
 uv run qerror.py $out
 uv run worse.py $out
-uv run runtime.py $db $out cardinal_off cardinal_fanout
+uv run runtime.py $db $out cardinal_off cardinal_on
 ```
 
 Tests: `uv run pytest`.

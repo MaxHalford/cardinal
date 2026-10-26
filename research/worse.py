@@ -2,7 +2,7 @@
 
     uv run worse.py <out> ...
 
-Reads <out>/plans/cardinal_off.jsonl and cardinal_fanout.jsonl (ext.py plans).
+Reads <out>/plans/cardinal_off.jsonl and cardinal_on.jsonl (ext.py plans).
 Cost: true cardinalities over DuckDB's cost model. Exits 1 if any query is worse.
 """
 
@@ -20,7 +20,7 @@ def costs(path):
 
 def worse(out):
     plans = pathlib.Path(out) / "plans"
-    off, fanout = costs(plans / "cardinal_off.jsonl"), costs(plans / "cardinal_fanout.jsonl")
+    off, fanout = costs(plans / "cardinal_off.jsonl"), costs(plans / "cardinal_on.jsonl")
     rows = sorted((fanout[q] / off[q], q) for q in off.keys() & fanout.keys() if off[q] and fanout[q] > off[q] * (1 + TOLERANCE))
     print(f"{out}: {len(rows)} of {len(off.keys() & fanout.keys())} queries worse, "
           f"total cost {sum(off.values()):.3g} -> {sum(fanout.values()):.3g}")

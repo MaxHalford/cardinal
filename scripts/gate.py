@@ -11,8 +11,8 @@
 Needs `make release`. Writes reports to build/gate/. Exits 1 on failure.
 
 suite runs DuckDB's test/sql in chunks, one process each, with the extension
-estimating ('fanout'), on disk too, and estimating nothing ('off'). Tests
-that fail with 'fanout' are re-run alone against 'off': a test that fails
+estimating ('on'), on disk too, and estimating nothing ('off'). Tests
+that fail with 'on' are re-run alone against 'off': a test that fails
 only with the extension is a regression. Some tests fail with 'off' too,
 e.g. when they need an extension the build lacks: they are not ours.
 """
@@ -41,7 +41,7 @@ CHUNK_TIMEOUT = 1800
 TEST_TIMEOUT = 900
 
 # Estimators compared by the suite: the extension's default, and none.
-FANOUT = "fanout"
+ON = "on"
 OFF = "off"
 
 
@@ -110,20 +110,20 @@ def fails_alone(test, estimator, storage):
 def suite():
     """Regressions: tests that fail with the extension estimating, and not without."""
     report = {}
-    for name, args in ((FANOUT, ["--test-config", str(config(FANOUT))]),
-                       ("storage", ["--test-config", str(config(FANOUT)), "--force-storage"])):
+    for name, args in ((ON, ["--test-config", str(config(ON))]),
+                       ("storage", ["--test-config", str(config(ON)), "--force-storage"])):
         count, failed, crashed = run_suite(args)
         report[name] = {"tests": count, "failed": sorted(failed), "crashed": sorted(crashed)}
         print(f"{name}: {count} tests, {len(failed)} failed, {len(crashed)} crashed", flush=True)
 
     # Candidates, alone: concurrency and test order no longer play.
     regressions = []
-    for name, storage in ((FANOUT, False), ("storage", True)):
+    for name, storage in ((ON, False), ("storage", True)):
         for test in report[name]["failed"] + report[name]["crashed"]:
             if not test.startswith("test/"):
                 regressions.append(test)
                 continue
-            if fails_alone(test, FANOUT, storage) and not fails_alone(test, OFF, storage):
+            if fails_alone(test, ON, storage) and not fails_alone(test, OFF, storage):
                 regressions.append(f"{'disk ' if storage else ''}{test}")
                 print(f"regression: {regressions[-1]}", flush=True)
     report["regressions"] = regressions
@@ -185,7 +185,7 @@ def stress_process(path, background):
             # growing changes between the two runs: its results may differ.
             racy = "growing" in sql
             try:
-                cur.execute(f"SET cardinal_estimator = '{FANOUT}'")
+                cur.execute(f"SET cardinal_estimator = '{ON}'")
                 got = cur.execute(sql).fetchall()
                 cur.execute(f"SET cardinal_estimator = '{OFF}'")
                 want = cur.execute(sql).fetchall()

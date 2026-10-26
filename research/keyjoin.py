@@ -288,7 +288,7 @@ def _init(db, out):
     con = duckdb.connect(db, read_only=True)
     graphs = bn.load_graphs(pathlib.Path(out))
     schema = joins.infer_schema(con, graphs.values())
-    plans = pathlib.Path(out) / "plans/cardinal_fanout.jsonl"
+    plans = pathlib.Path(out) / "plans/cardinal_on.jsonl"
     extension = {}
     if plans.exists():
         for r in read_jsonl(plans):

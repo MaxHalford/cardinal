@@ -55,22 +55,37 @@ static thread_local vector<Frame> frames;
 //! Large, so integer rounding does not distort the factor.
 static constexpr idx_t PROBE_ROWS = 1000000000000;
 
+//! The estimator a setting value names, e.g. 'on' -> FANOUT. False for anything else.
+static bool ParseEstimator(const Value &value, Estimator &result) {
+	auto name = StringUtil::Lower(value.ToString());
+	if (name == "on") {
+		result = Estimator::FANOUT;
+	} else if (name == "off") {
+		result = Estimator::OFF;
+	} else if (name == "bn") {
+		result = Estimator::BN;
+	} else if (name == "exact") {
+		result = Estimator::EXACT;
+	} else {
+		return false;
+	}
+	return true;
+}
+
+void CheckEstimator(ClientContext &context, SetScope scope, Value &parameter) {
+	Estimator estimator;
+	if (!ParseEstimator(parameter, estimator)) {
+		throw InvalidInputException("%s must be one of 'on', 'off', 'bn', 'exact'", ESTIMATOR_SETTING);
+	}
+}
+
 Estimator CurrentEstimator(ClientContext &context) {
 	Value value;
-	if (!context.TryGetCurrentSetting(ESTIMATOR_SETTING, value)) {
-		return Estimator::FANOUT;
+	auto estimator = Estimator::FANOUT;
+	if (context.TryGetCurrentSetting(ESTIMATOR_SETTING, value)) {
+		ParseEstimator(value, estimator);
 	}
-	auto name = StringUtil::Lower(value.ToString());
-	if (name == "exact") {
-		return Estimator::EXACT;
-	}
-	if (name == "bn") {
-		return Estimator::BN;
-	}
-	if (name == "fanout") {
-		return Estimator::FANOUT;
-	}
-	return Estimator::OFF;
+	return estimator;
 }
 
 //! cardinality of the probe scan.
