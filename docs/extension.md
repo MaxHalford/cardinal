@@ -12,11 +12,11 @@ That's it: queries are planned as before, with better numbers.
 
 When DuckDB plans a query, cardinal:
 
-1. **Learns** from it: the columns its filters read, and the joins between tables. A join on a unique column (declared `PRIMARY KEY` or `UNIQUE`, or checked once) tells which column is a primary key and which a foreign key.
-2. **Fits a model** per table it needs, if it has none yet: a Bayesian network over the columns filters read, plus, for each foreign key that points to the table, how many rows point to each of its rows. Fitting reads a sample of at most one million rows. It takes milliseconds for small tables, around a second for large ones, and happens once: the query that needs the model waits for it.
-3. **Estimates** the query's filters and joins with the models, and gives DuckDB the row and distinct counts that make DuckDB's own formulas reproduce those estimates. DuckDB then plans as usual.
+1. **Learns** from it: the columns its filters read, and the joins between tables. A join on a unique column (declared `PRIMARY KEY` or `UNIQUE`, or checked once) tells which column is a primary key and which a foreign key. A join between two columns that are not unique, e.g. `d1.week = d2.week`, goes through their values.
+2. **Fits a model** per table it needs, if it has none yet: a Bayesian network over the columns filters and joins read, plus, for each foreign key that points to the table, how many rows point to each of its rows. Fitting reads a sample of at most one million rows. It takes milliseconds for small tables, around a second for large ones, and happens once: the query that needs the model waits for it.
+3. **Estimates** the query's filters and joins with the models, including filters across tables, e.g. `t.kind = 1 OR c.note = 'x'`, and gives DuckDB the row and distinct counts that make DuckDB's own formulas reproduce those estimates. DuckDB then plans as usual.
 
-For anything cardinal can't estimate, e.g. a join without a known primary key, the query is planned by DuckDB alone. Query results never change, only plans; if anything goes wrong inside cardinal, DuckDB plans without it.
+When cardinal can estimate less than half of a query's joins, e.g. joins in a cycle, the query is planned by DuckDB alone. Query results never change, only plans; if anything goes wrong inside cardinal, DuckDB plans without it.
 
 ## On by default, or opt in
 
@@ -25,9 +25,9 @@ Cardinal estimates every query once loaded. To use it only where you choose, tur
 ```sql
 SET GLOBAL cardinal_estimator = 'off';
 
-SET cardinal_estimator = 'fanout';   -- this connection
+SET cardinal_estimator = 'on';    -- this connection
 SELECT ...;
-SET cardinal_estimator = 'off';      -- not RESET: it restores the default, 'fanout'
+SET cardinal_estimator = 'off';   -- not RESET: it restores the default, 'on'
 ```
 
 While off, cardinal learns nothing: the first query it estimates learns the tables it reads and fits their models, and waits for the fit. To fit ahead of time, run the workload once with cardinal on, then fit:
@@ -63,7 +63,7 @@ SELECT * FROM cardinal_models();   -- the models saved for the current database
 |---|---|---|
 | `CALL cardinal_fit_eager()`, `cardinal_fit_eager('table')` | | fit now, rather than when queries need it; all tables without an argument |
 | `SELECT * FROM cardinal_models()` | | the models saved for the current database |
-| `SET cardinal_estimator` | `'fanout'` | `'off'` turns cardinal off; `'bn'` (filtered scans only) and `'exact'` (true counts) are for experiments |
+| `SET cardinal_estimator` | `'on'` | `'off'` turns cardinal off; `'bn'` (filtered scans only) and `'exact'` (true counts) are for experiments |
 | `SET cardinal_save` | `true` | save fitted models |
 | `SET cardinal_store` | `''` | the models' file, used as is; empty: the release's file above |
 | `SET cardinal_background` | `false` | fit on a worker thread, planning with what there is meanwhile. The worker's transactions make `CHECKPOINT` fail while it runs, and keep a closed database open until the fit ends. |
@@ -71,6 +71,7 @@ SELECT * FROM cardinal_models();   -- the models saved for the current database
 ## Limits
 
 - The first query that needs a table's model waits for its fit.
-- Estimates cover joins on equal columns that form a tree, each through a primary key. Other joins (cycles, joins between two non-unique columns without a known key) are left to DuckDB.
+- Estimates cover equi-joins that form a tree. Cycles, joins on several columns at once, and conditions such as `a.x < b.y` are left to DuckDB's own estimates.
+- Only DuckDB tables: queries that read Parquet or CSV files, or tables of other systems attached to DuckDB, e.g. PostgreSQL, are planned by DuckDB alone.
 - `EXPLAIN` shows the row counts cardinal gives DuckDB, which are fitted to reproduce join estimates: they can differ from a table's real filtered row count.
 - Built against DuckDB v2.0.0, and relies on DuckDB internals: each DuckDB release needs a port. See [upgrading.md](upgrading.md).
