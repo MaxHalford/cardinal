@@ -23,7 +23,7 @@ static string ColumnSQL(LogicalGet &get, const ColumnIndex &index) {
 	if (index.IsVirtualColumn() || index.GetPrimaryIndex() >= get.names.size()) {
 		return "";
 	}
-	return KeywordHelper::WriteOptionallyQuoted(get.names[index.GetPrimaryIndex()].GetIdentifierName());
+	return SQLIdentifier::ToString(get.names[index.GetPrimaryIndex()].GetIdentifierName());
 }
 
 //! A filter on the scan's columns as SQL. Empty when it has no SQL form, e.g. a dynamic filter.
@@ -75,9 +75,9 @@ string ScanQuery(LogicalGet &get, const vector<unique_ptr<Expression>> &filters,
 
 	auto &table = *get.GetTable();
 	auto sql = "SELECT " + select + " FROM " +
-	           KeywordHelper::WriteOptionallyQuoted(table.ParentCatalog().GetName().GetIdentifierName()) + "." +
-	           KeywordHelper::WriteOptionallyQuoted(table.ParentSchema().name.GetIdentifierName()) + "." +
-	           KeywordHelper::WriteOptionallyQuoted(table.name.GetIdentifierName());
+	           SQLIdentifier::ToString(table.ParentCatalog().GetName().GetIdentifierName()) + "." +
+	           SQLIdentifier::ToString(table.ParentSchema().name.GetIdentifierName()) + "." +
+	           SQLIdentifier::ToString(table.name.GetIdentifierName());
 	if (!conditions.empty()) {
 		sql += " WHERE " + StringUtil::Join(conditions, " AND ");
 	}

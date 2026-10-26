@@ -129,12 +129,12 @@ static bool CheckUnique(ClientContext &context, TableCatalogEntry &table, const 
 	if (stats && rows > 0 && double(stats->GetDistinctCount()) < UNIQUE_HINT * double(rows)) {
 		return false;
 	}
-	auto name = KeywordHelper::WriteOptionallyQuoted(column);
-	auto result = InnerQuery(
-	    context, "SELECT count(DISTINCT " + name + ") = count(" + name + ") AND count(" + name + ") > 0 FROM " +
-	                 KeywordHelper::WriteOptionallyQuoted(table.ParentCatalog().GetName().GetIdentifierName()) + "." +
-	                 KeywordHelper::WriteOptionallyQuoted(table.ParentSchema().name.GetIdentifierName()) + "." +
-	                 KeywordHelper::WriteOptionallyQuoted(table.name.GetIdentifierName()));
+	auto name = SQLIdentifier::ToString(column);
+	auto result = InnerQuery(context, "SELECT count(DISTINCT " + name + ") = count(" + name + ") AND count(" + name +
+	                                      ") > 0 FROM " +
+	                                      SQLIdentifier::ToString(table.ParentCatalog().GetName().GetIdentifierName()) +
+	                                      "." + SQLIdentifier::ToString(table.ParentSchema().name.GetIdentifierName()) +
+	                                      "." + SQLIdentifier::ToString(table.name.GetIdentifierName()));
 	return result && result->GetValue(0, 0).GetValue<bool>();
 }
 

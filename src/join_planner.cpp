@@ -130,8 +130,8 @@ static void DimensionKeys(ClientContext &context, const QueryGraph &graph, vecto
 		// Small: it folds under a filter across relations too, with the keys passing it.
 		domain.small = true;
 		if (!FilteredColumns(get, relation.filters).empty()) {
-			auto result = InnerQuery(
-			    context, ScanQuery(get, relation.filters, KeywordHelper::WriteOptionallyQuoted(domain.key.column)));
+			auto result =
+			    InnerQuery(context, ScanQuery(get, relation.filters, SQLIdentifier::ToString(domain.key.column)));
 			if (result) {
 				domain.folds = true;
 				for (idx_t i = 0; i < result->RowCount(); i++) {

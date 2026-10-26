@@ -252,8 +252,7 @@ const vector<Value> *JoinEstimator::FoldKeys(const Class &c) {
 			filters.push_back(condition->Copy());
 		}
 		unique_ptr<vector<Value>> keys;
-		auto result =
-		    InnerQuery(context, ScanQuery(get, filters, KeywordHelper::WriteOptionallyQuoted(domain.key.column)));
+		auto result = InnerQuery(context, ScanQuery(get, filters, SQLIdentifier::ToString(domain.key.column)));
 		if (result) {
 			keys = make_uniq<vector<Value>>();
 			for (idx_t i = 0; i < result->RowCount(); i++) {

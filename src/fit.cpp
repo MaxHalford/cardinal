@@ -45,7 +45,7 @@ static constexpr idx_t FANOUT_BINS = 16;
 using Codes = vector<vector<uint32_t>>;
 
 static string Quote(const string &name) {
-	return KeywordHelper::WriteOptionallyQuoted(name);
+	return SQLIdentifier::ToString(name);
 }
 
 //! The table's name in SQL: "catalog"."schema"."table".
@@ -74,10 +74,10 @@ static vector<Hashes> HashColumns(ColumnDataCollection &sample, idx_t count) {
 	for (auto &chunk : sample.Chunks()) {
 		for (idx_t c = 0; c < columns.size(); c++) {
 			VectorOperations::Hash(chunk.data[c], hashes, chunk.size());
-			hashes.Flatten(chunk.size());
+			hashes.Flatten();
 			auto data = FlatVector::GetData<hash_t>(hashes);
 			UnifiedVectorFormat format;
-			chunk.data[c].ToUnifiedFormat(chunk.size(), format);
+			chunk.data[c].ToUnifiedFormat(format);
 			for (idx_t r = 0; r < chunk.size(); r++) {
 				columns[c].hash.push_back(data[r]);
 				columns[c].null.push_back(!format.validity.RowIsValid(format.sel->get_index(r)));
@@ -424,7 +424,7 @@ shared_ptr<Model> FitModel(Connection &con, TableCatalogEntry &table, const vect
 	for (idx_t i = 0; i < fanouts.size(); i++) {
 		for (auto &chunk : sample.Chunks()) {
 			UnifiedVectorFormat format;
-			chunk.data[fits.size() + i].ToUnifiedFormat(chunk.size(), format);
+			chunk.data[fits.size() + i].ToUnifiedFormat(format);
 			auto data = UnifiedVectorFormat::GetData<int64_t>(format);
 			for (idx_t r = 0; r < chunk.size(); r++) {
 				fanout_counts[i].push_back(data[format.sel->get_index(r)]);
