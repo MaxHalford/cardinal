@@ -33,6 +33,27 @@ Estimates improve everywhere. Time follows where join order matters: STATS-CEB's
 
 Measured on an Apple M5 Pro. How, and more: [research/](research/).
 
+### Example
+
+STATS-CEB's query 107 counts the comments, votes and badges of users, with filters on each:
+
+```sql
+SELECT count(*) FROM comments AS c, votes AS v, badges AS b, users AS u
+WHERE u.Id = b.UserId AND u.Id = c.UserId AND u.Id = v.UserId
+  AND c.Score = 1 AND c.CreationDate >= '2010-08-27 14:12:07'::TIMESTAMP
+  AND v.VoteTypeId = 5
+  AND v.CreationDate BETWEEN '2010-07-19'::TIMESTAMP AND '2014-09-13'::TIMESTAMP
+  AND b.Date <= '2014-08-19 10:32:13'::TIMESTAMP AND u.Reputation >= 1;
+```
+
+| | DuckDB alone | With cardinal |
+|---|---|---|
+| Estimated result | 1,865 rows | 28 million rows |
+| True result | 537 million rows | 537 million rows |
+| Time | 12.9 s | 0.45 s |
+
+Cardinal's estimate is still low, but close enough for DuckDB to pick a plan 29 times faster.
+
 ## Installation
 
 Once cardinal is listed in DuckDB's [community extensions](https://duckdb.org/community_extensions/) (in progress), install it from any DuckDB client:
