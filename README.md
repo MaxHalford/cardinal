@@ -1,5 +1,7 @@
 <div align="center">
     <h1>cardinal — better cardinality estimates for DuckDB</h1>
+    <a href="https://github.com/MaxHalford/cardinal/actions/workflows/MainDistributionPipeline.yml"><img src="https://github.com/MaxHalford/cardinal/actions/workflows/MainDistributionPipeline.yml/badge.svg" alt="CI"></a>
+    <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="MIT license"></a>
 </div>
 </br>
 
@@ -74,3 +76,7 @@ Each DuckDB release needs a port: see [docs/upgrading.md](docs/upgrading.md).
 ## Research
 
 The evaluation (benchmarks, accuracy, plan quality, runtime) lives in [research/](research/).
+
+## License
+
+[MIT](LICENSE).
