@@ -9,9 +9,99 @@
 
 DuckDB picks a join order from estimates of how many rows each join produces. Those estimates assume columns are independent, so on real data they can be off by orders of magnitude, and DuckDB picks slow plans.
 
-`cardinal` is a DuckDB extension that learns Bayesian networks from your tables, and gives DuckDB their estimates instead. It needs no configuration: load it, and queries are planned with better numbers. Results never change, only plans.
+`cardinal` is a DuckDB extension that learns Bayesian networks from your tables, and gives DuckDB their estimates instead. It needs no configuration: load it, and queries are planned with better numbers. Results never change, only plans. On the STATS-CEB benchmark, total runtime drops from 130 s to 67 s.
 
 <br clear="right"/>
+
+## Quick start
+
+Cardinal isn't in DuckDB's [community extensions](https://duckdb.org/community_extensions/) yet, so build it from source. You need what [DuckDB's build](https://duckdb.org/docs/stable/dev/building/overview) needs: Git, CMake and a C++ compiler. The build compiles DuckDB v2.0.0 itself: about 15 minutes on an Apple M5 Pro.
+
+```sh
+git clone https://github.com/MaxHalford/cardinal
+cd cardinal
+git submodule update --init duckdb extension-ci-tools
+make release
+```
+
+This gives `build/release/duckdb`, a DuckDB CLI with cardinal built in. Open a database file with it, and query as usual:
+
+```sh
+./build/release/duckdb my.duckdb
+```
+
+```sql
+CREATE TABLE a AS SELECT range AS id, range % 10 AS x FROM range(1000);
+CREATE TABLE b AS SELECT range % 1000 AS a_id, range % 7 AS y FROM range(10000);
+SELECT count(*) FROM a, b WHERE a.id = b.a_id AND a.x = 3 AND b.y = 2;
+```
+
+The join's first run fits a model per table. They show up in `cardinal_models()`:
+
+```sql
+SELECT * FROM cardinal_models();
+```
+
+```
+┌─────────────┬────────────┬───────────┬──────────────────┐
+│ schema_name │ table_name │ row_count │     columns      │
+├─────────────┼────────────┼───────────┼──────────────────┤
+│ main        │ a          │      1000 │ ['F(b.a_id)', x] │
+│ main        │ b          │     10000 │ [a_id, y]        │
+└─────────────┴────────────┴───────────┴──────────────────┘
+```
+
+Models are saved in `~/.duckdb/extension_data/cardinal/`, never in your database, and refitted when a table's row count changes by more than 10%. A query that needs a model waits for its fit: milliseconds for small tables, about a second for large ones.
+
+### Other clients
+
+A client must be DuckDB v2.0.0 to load the extension built above. Allow unsigned extensions, then load the file:
+
+```sh
+duckdb -unsigned -c "LOAD 'build/release/extension/cardinal/cardinal.duckdb_extension';"
+```
+
+```python
+import duckdb
+
+con = duckdb.connect(config={"allow_unsigned_extensions": "true"})
+con.load_extension("build/release/extension/cardinal/cardinal.duckdb_extension")
+```
+
+Once cardinal is a community extension, this becomes:
+
+```sql
+INSTALL cardinal FROM community;
+LOAD cardinal;
+```
+
+## Example
+
+STATS-CEB's query 107 counts the comments, votes and badges of users, with filters on each:
+
+```sql
+SELECT count(*) FROM comments AS c, votes AS v, badges AS b, users AS u
+WHERE u.Id = b.UserId AND u.Id = c.UserId AND u.Id = v.UserId
+  AND c.Score = 1 AND c.CreationDate >= '2010-08-27 14:12:07'::TIMESTAMP
+  AND v.VoteTypeId = 5
+  AND v.CreationDate BETWEEN '2010-07-19'::TIMESTAMP AND '2014-09-13'::TIMESTAMP
+  AND b.Date <= '2014-08-19 10:32:13'::TIMESTAMP AND u.Reputation >= 1;
+```
+
+| | DuckDB alone | With cardinal |
+|---|---|---|
+| Estimated result | 1,865 rows | 28 million rows |
+| True result | 537 million rows | 537 million rows |
+| Time | 12.9 s | 0.45 s |
+
+Cardinal's estimate is still low, but close enough for DuckDB to pick a plan 29 times faster.
+
+To compare on your own queries, turn cardinal off and on for the connection:
+
+```sql
+SET cardinal_estimator = 'off';
+SET cardinal_estimator = 'on';
+```
 
 ## Benchmarks
 
@@ -33,70 +123,22 @@ Estimates improve everywhere. Time follows where join order matters: STATS-CEB's
 
 Measured on an Apple M5 Pro. How, and more: [research/](research/).
 
-### Example
+## Limits
 
-STATS-CEB's query 107 counts the comments, votes and badges of users, with filters on each:
+- Only DuckDB tables: queries that read Parquet or CSV files, or attached PostgreSQL tables, are planned by DuckDB alone.
+- Joins in a cycle, joins on several columns at once, and conditions such as `a.x < b.y` are left to DuckDB's own estimates.
+- Cardinal relies on DuckDB internals, so each DuckDB release needs a new build of it.
 
-```sql
-SELECT count(*) FROM comments AS c, votes AS v, badges AS b, users AS u
-WHERE u.Id = b.UserId AND u.Id = c.UserId AND u.Id = v.UserId
-  AND c.Score = 1 AND c.CreationDate >= '2010-08-27 14:12:07'::TIMESTAMP
-  AND v.VoteTypeId = 5
-  AND v.CreationDate BETWEEN '2010-07-19'::TIMESTAMP AND '2014-09-13'::TIMESTAMP
-  AND b.Date <= '2014-08-19 10:32:13'::TIMESTAMP AND u.Reputation >= 1;
-```
+How it works, settings, opting in per connection, and fitting ahead of time: [docs/extension.md](docs/extension.md).
 
-| | DuckDB alone | With cardinal |
-|---|---|---|
-| Estimated result | 1,865 rows | 28 million rows |
-| True result | 537 million rows | 537 million rows |
-| Time | 12.9 s | 0.45 s |
-
-Cardinal's estimate is still low, but close enough for DuckDB to pick a plan 29 times faster.
-
-## Installation
-
-Once cardinal is listed in DuckDB's [community extensions](https://duckdb.org/community_extensions/) (in progress), install it from any DuckDB client:
-
-```sql
-INSTALL cardinal FROM community;
-LOAD cardinal;
-```
-
-Until then, [build it](#building) and load the file, with unsigned extensions allowed:
+## Development
 
 ```sh
-duckdb -unsigned -c "LOAD 'build/release/extension/cardinal/cardinal.duckdb_extension';"
-```
-
-```python
-import duckdb
-
-con = duckdb.connect(config={"allow_unsigned_extensions": "true"})
-con.load_extension("build/release/extension/cardinal/cardinal.duckdb_extension")
-```
-
-The extension must be built for the same DuckDB version as the client loading it: v2.0.0.
-
-## Usage
-
-Once loaded, every query is planned with cardinal's estimates. Nothing else is needed.
-
-Models are fitted the first time a query needs them, saved, and refreshed when tables change. How it behaves, where models live, settings and limits: [docs/extension.md](docs/extension.md).
-
-## Building
-
-```sh
-git submodule update --init
-make release      # DuckDB with the extension: build/release/duckdb
+make release
 ./build/release/test/unittest "test/*"
 ```
 
-Each DuckDB release needs a port: see [docs/upgrading.md](docs/upgrading.md).
-
-## Research
-
-The evaluation (benchmarks, accuracy, plan quality, runtime) lives in [research/](research/).
+Porting to a new DuckDB release: [docs/upgrading.md](docs/upgrading.md). The evaluation (benchmarks, accuracy, plan quality, runtime) lives in [research/](research/).
 
 ## License
 
