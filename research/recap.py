@@ -43,13 +43,13 @@ def row(out):
     slower = sum(1 for q in queries if times["on"][q] > RATIO * times["off"][q] and times["on"][q] - times["off"][q] > MIN_DELTA)
     speedup = math.exp(sum(math.log(times["off"][q] / times["on"][q]) for q in queries) / len(queries))
     return (f"| {out.name} | {len(queries)} | {off:.1f} s → {fanout:.1f} s | {off - fanout:+.1f} s ({100 * (off - fanout) / off:+.0f}%) "
-            f"| {faster} / {slower} | {speedup:.2f}× | {median_qerror(out, 'off'):.1f} → {median_qerror(out, 'on'):.1f} |")
+            f"| {faster} / {len(queries) - faster - slower} / {slower} | {speedup:.2f}× | {median_qerror(out, 'off'):.1f} → {median_qerror(out, 'on'):.1f} |")
 
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
         sys.exit(__doc__)
-    print("| Benchmark | Queries | Total time | Saved | Faster / slower | Geo-mean speedup | Median estimate error |")
+    print("| Benchmark | Queries | Total time | Saved | Faster / same / slower | Geo-mean speedup | Median estimate error |")
     print("|---|---|---|---|---|---|---|")
     for out in sys.argv[1:]:
         print(row(out))
