@@ -7,6 +7,7 @@ How good are DuckDB's cardinality estimates, and how much better do Bayesian net
 - `bn.py` answers the questions with per-table Bayesian networks (`tables.py`) and fanout columns for joins (`joins.py`). `score.py` compares q-errors.
 - `plans.py` injects estimates into DuckDB and scores the chosen plans with true cardinalities (P-error). `runtime.py` times them.
 - `ext.py` scores the plans the `cardinal` extension leads DuckDB to. `qerror.py` compares the estimates DuckDB plans with, `worse.py` lists plans worse than DuckDB's own.
+- `plan_figures.py` draws STATS-CEB query 58's plans, with and without cardinal, for the blog post.
 - `keyjoin.py` compares assumptions for key joins, with exact per-table counts: today's fanout, and groups of keys.
 
 ## Setup
