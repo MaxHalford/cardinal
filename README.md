@@ -92,7 +92,9 @@ WHERE u.Id = b.UserId AND u.Id = c.UserId AND u.Id = v.UserId
 |---|---|---|
 | Estimated result | 1,865 rows | 28 million rows |
 | True result | 537 million rows | 537 million rows |
-| Time | 12.9 s | 0.45 s |
+| Estimate error | 288,000× too low | 19× too low |
+| Planning time | 1.0 ms | 1.1 ms |
+| Total time | 12.9 s | 0.45 s |
 
 Cardinal's estimate is still low, but close enough for DuckDB to pick a plan 29 times faster.
 
