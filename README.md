@@ -15,20 +15,14 @@ DuckDB picks a join order from estimates of how many rows each join produces. Th
 
 ## Quick start
 
-Cardinal isn't in DuckDB's [community extensions](https://duckdb.org/community_extensions/) yet, so build it from source. You need what [DuckDB's build](https://duckdb.org/docs/stable/dev/building/overview) needs: Git, CMake and a C++ compiler. The build compiles DuckDB v2.0.0 itself: about 15 minutes on an Apple M5 Pro.
+Cardinal is a DuckDB [community extension](https://duckdb.org/community_extensions/extensions/cardinal), for DuckDB v2.0.0. Install and load it from any DuckDB client:
 
-```sh
-git clone https://github.com/MaxHalford/cardinal
-cd cardinal
-git submodule update --init duckdb extension-ci-tools
-make release
+```sql
+INSTALL cardinal FROM community;
+LOAD cardinal;
 ```
 
-This gives `build/release/duckdb`, a DuckDB CLI with cardinal built in. Open a database file with it, and query as usual:
-
-```sh
-./build/release/duckdb my.duckdb
-```
+Then query as usual. With a database file, e.g. `duckdb my.duckdb`:
 
 ```sql
 CREATE TABLE a AS SELECT range AS id, range % 10 AS x FROM range(1000);
@@ -52,28 +46,6 @@ SELECT * FROM cardinal_models();
 ```
 
 Models are saved in `~/.duckdb/extension_data/cardinal/`, never in your database, and refitted when a table's row count changes by more than 10%. A query that needs a model waits for its fit: milliseconds for small tables, about a second for large ones.
-
-### Other clients
-
-A client must be DuckDB v2.0.0 to load the extension built above. Allow unsigned extensions, then load the file:
-
-```sh
-duckdb -unsigned -c "LOAD 'build/release/extension/cardinal/cardinal.duckdb_extension';"
-```
-
-```python
-import duckdb
-
-con = duckdb.connect(config={"allow_unsigned_extensions": "true"})
-con.load_extension("build/release/extension/cardinal/cardinal.duckdb_extension")
-```
-
-Once cardinal is a community extension, this becomes:
-
-```sql
-INSTALL cardinal FROM community;
-LOAD cardinal;
-```
 
 ## Example
 
@@ -135,10 +107,17 @@ How it works, settings, opting in per connection, and fitting ahead of time: [do
 
 ## Development
 
+Building needs what [DuckDB's build](https://duckdb.org/docs/stable/dev/building/overview) needs: Git, CMake and a C++ compiler. It compiles DuckDB v2.0.0 itself: about 15 minutes on an Apple M5 Pro.
+
 ```sh
+git clone https://github.com/MaxHalford/cardinal
+cd cardinal
+git submodule update --init duckdb extension-ci-tools
 make release
 ./build/release/test/unittest "test/*"
 ```
+
+`build/release/duckdb` is a DuckDB CLI with cardinal built in.
 
 Porting to a new DuckDB release: [docs/upgrading.md](docs/upgrading.md). The evaluation (benchmarks, accuracy, plan quality, runtime) lives in [research/](research/).
 
