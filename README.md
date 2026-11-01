@@ -70,6 +70,41 @@ WHERE u.Id = b.UserId AND u.Id = c.UserId AND u.Id = v.UserId
 
 Cardinal's estimate is still low, but close enough for DuckDB to pick a plan 29 times faster.
 
+To compare on your own queries, turn cardinal off and on for the connection:
+
+```sql
+SET cardinal_estimator = 'off';
+SET cardinal_estimator = 'on';
+```
+
+### How the plans differ
+
+DuckDB runs each join as a hash join: it stores one input, the build side, in a hash table, and streams the other input through it. It builds on the side it thinks is smaller. Each join shows its estimated and true rows:
+
+```
+DuckDB alone                          estimated          true
+⋈ u.Id = v.UserId                         1,865   537,352,263
+├── users                                40,325        40,325
+└── build: ⋈ v.UserId = c.UserId          1,711   537,352,263
+    ├── votes                            25,236        33,690
+    └── build: ⋈ b.UserId = c.UserId      2,508     3,203,614
+        ├── badges                       15,970        77,535
+        └── build: comments               5,811        24,733
+```
+
+```
+With cardinal                         estimated          true
+⋈ v.UserId = u.Id                    28,146,412   537,352,263
+├── ⋈ v.UserId = c.UserId               610,081     2,087,379
+│   ├── votes                            46,598        33,690
+│   └── build: comments                  44,187        24,733
+└── build: ⋈ b.UserId = u.Id            155,707        77,535
+    ├── badges                           76,106        77,535
+    └── build: users                      6,905        40,325
+```
+
+Alone, DuckDB thinks joining comments, badges and votes gives 1,711 rows, fewer than the 40,325 users. So it builds the last hash table on that join, which stores 537 million rows. With cardinal, DuckDB sees that this join explodes. It joins votes with comments (2 million rows) and badges with users (78,000 rows), and builds on the smaller one. The last join then streams its 537 million rows into `count(*)` and stores none of them.
+
 ### Why DuckDB's estimate is off
 
 DuckDB estimates with [almost no statistics](https://blobs.duckdb.org/papers/tom-ebergen-msc-thesis-join-order-optimization-with-almost-no-statistics.pdf):
@@ -83,13 +118,6 @@ The join rule assumes every key matches as many rows as any other. Here, an aver
 ### Why cardinal's estimate is closer
 
 Cardinal fits a [Bayesian network](https://en.wikipedia.org/wiki/Bayesian_network) per table. It learns how the columns that queries filter on correlate, instead of treating each filter alone. Following [BayesCard](https://arxiv.org/abs/2012.14743), each table also gets fanout columns: for each user, the count of its comments, votes and badges. The network learns these counts together, so it knows that a user with many comments also has many votes. A join's size is then the sum, over the users that pass the filters, of comments × votes × badges.
-
-To compare on your own queries, turn cardinal off and on for the connection:
-
-```sql
-SET cardinal_estimator = 'off';
-SET cardinal_estimator = 'on';
-```
 
 ## Benchmarks
 
