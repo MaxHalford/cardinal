@@ -7,7 +7,7 @@
 
 <img style="padding-bottom: 20px" src="logo.png" width="30%" alt="A duck dressed as a cardinal, wearing a medallion with a bar chart" align="right" />
 
-DuckDB picks a join order from estimates of how many rows each join produces. Those estimates assume columns are independent, so on real data they can be off by orders of magnitude, and DuckDB picks slow plans.
+DuckDB picks a join order from estimates of how many rows each join produces. Those estimates assume columns are independent and every join key matches as many rows as any other, so on real data they can be off by orders of magnitude, and DuckDB picks slow plans.
 
 `cardinal` is a DuckDB extension that learns Bayesian networks from your tables, and gives DuckDB their estimates instead. It needs no configuration: load it, and queries are planned with better numbers. Results never change, only plans. On the STATS-CEB benchmark, total runtime drops from 130 s to 67 s.
 
@@ -69,6 +69,20 @@ WHERE u.Id = b.UserId AND u.Id = c.UserId AND u.Id = v.UserId
 | Total time | 12.9 s | 0.45 s |
 
 Cardinal's estimate is still low, but close enough for DuckDB to pick a plan 29 times faster.
+
+### Why DuckDB's estimate is off
+
+DuckDB estimates with [almost no statistics](https://blobs.duckdb.org/papers/tom-ebergen-msc-thesis-join-order-optimization-with-almost-no-statistics.pdf):
+
+- `x = 'a'` keeps the rows divided by the distinct values of `x`.
+- Any other filter keeps 20% of the rows.
+- A join gives the product of its inputs, divided by the distinct join keys.
+
+The join rule assumes every key matches as many rows as any other. Here, an average user has 0.6 matching comments, 0.8 votes and 1.9 badges, so the 40,325 users would give about 40,000 rows. But active users comment, vote and earn badges at once, and their counts multiply. User 805 alone gives 1,845 × 482 × 294 = 261 million rows. Ten users give 97% of the result.
+
+### Why cardinal's estimate is closer
+
+Cardinal fits a [Bayesian network](https://en.wikipedia.org/wiki/Bayesian_network) per table. It learns how the columns that queries filter on correlate, instead of treating each filter alone. Following [BayesCard](https://arxiv.org/abs/2012.14743), each table also gets fanout columns: for each user, the count of its comments, votes and badges. The network learns these counts together, so it knows that a user with many comments also has many votes. A join's size is then the sum, over the users that pass the filters, of comments × votes × badges.
 
 To compare on your own queries, turn cardinal off and on for the connection:
 
