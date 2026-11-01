@@ -118,9 +118,7 @@ DuckDB alone                          estimated          true
     └── build: ⋈ b.UserId = c.UserId      2,508     3,203,614
         ├── badges                       15,970        77,535
         └── build: comments               5,811        24,733
-```
 
-```
 With cardinal                         estimated          true
 ⋈ v.UserId = u.Id                    28,146,412   537,352,263
 ├── ⋈ v.UserId = c.UserId               610,081     2,087,379
