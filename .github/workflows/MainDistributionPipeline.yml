@@ -2,8 +2,18 @@
 # Builds and tests the extension with DuckDB's own extension pipeline, as the community
 # extensions repository does for releases.
 #
-# Pushes to main build Linux, for fast feedback, and check formatting. PRs, the weekly run and
-# manual runs (e.g. a DuckDB upgrade branch) build every platform and run clang-tidy.
+# Pushes to main build Linux, for fast feedback, and check formatting. PRs and manual runs
+# (e.g. a DuckDB upgrade branch) build every platform and run clang-tidy.
+#
+# The daily run builds against DuckDB releases to come instead, so a break shows up before
+# users hit it. The community extensions repository rebuilds the extension, at the
+# descriptor's ref, for each DuckDB release: when these pass, there is nothing to do.
+#
+#   patch  the head of the current release branch: the next bugfix release
+#   next   the newest release branch, once DuckDB creates it at feature freeze (~2 weeks
+#          before a minor release)
+#
+# A failure opens an issue, or comments on the open one. A pass closes it.
 #
 name: Main Extension Distribution Pipeline
 on:
@@ -12,17 +22,31 @@ on:
     paths-ignore: ['research/**', 'docs/**', '**.md']
   pull_request:
     paths-ignore: ['research/**', 'docs/**', '**.md']
+  # Daily: a feature freeze lasts ~2 weeks.
   schedule:
-    - cron: '0 5 * * 1'
+    - cron: '0 6 * * *'
   workflow_dispatch:
+    inputs:
+      mode:
+        description: 'stable: v2.0.0, every platform. next: the daily run.'
+        type: choice
+        options: [stable, next]
+        default: stable
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.head_ref || '' }}-${{ github.base_ref || '' }}-${{ github.ref != 'refs/heads/main' && github.sha || '' }}
+  group: ${{ github.workflow }}-${{ (github.event_name == 'schedule' || inputs.mode == 'next') && 'next' || '' }}-${{ github.ref }}-${{ github.head_ref || '' }}-${{ github.base_ref || '' }}-${{ github.ref != 'refs/heads/main' && github.sha || '' }}
   cancel-in-progress: true
+
+env:
+  # The release branch the extension is ported to. Bump it, and the v2.0 refs below, with
+  # each port (docs/upgrading.md).
+  CURRENT_BRANCH: v2.0-cyanoptera
+  ISSUE_LABEL: duckdb-next
 
 jobs:
   duckdb-stable-build:
     name: Build extension binaries
+    if: ${{ !(github.event_name == 'schedule' || inputs.mode == 'next') }}
     uses: duckdb/extension-ci-tools/.github/workflows/_extension_distribution.yml@v2.0-cyanoptera
     with:
       duckdb_version: v2.0.0
@@ -34,9 +58,99 @@ jobs:
   # DuckDB's formatting (clang-format 11) and static analysis (clang-tidy) rules.
   code-quality-check:
     name: Code Quality Check
+    if: ${{ !(github.event_name == 'schedule' || inputs.mode == 'next') }}
     uses: duckdb/extension-ci-tools/.github/workflows/_extension_code_quality.yml@v2.0-cyanoptera
     with:
       duckdb_version: v2.0.0
       ci_tools_version: v2.0-cyanoptera
       extension_name: cardinal
       format_checks: ${{ github.event_name == 'push' && 'format' || 'format;tidy' }}
+
+  target:
+    name: Find DuckDB releases to come
+    if: github.event_name == 'schedule' || inputs.mode == 'next'
+    runs-on: ubuntu-latest
+    outputs:
+      next: ${{ steps.find.outputs.next }}
+    steps:
+      # Release branches look like v2.0-cyanoptera. The newest one, if newer than ours.
+      - id: find
+        run: |
+          newest=$(git ls-remote --heads https://github.com/duckdb/duckdb 'v*-*' \
+            | sed 's|.*refs/heads/||' | grep -E '^v[0-9]+\.[0-9]+-[a-z]+$' | sort -V | tail -1)
+          if [ "$newest" != "$CURRENT_BRANCH" ]; then
+            echo "next=$newest" >> "$GITHUB_OUTPUT"
+          fi
+          echo "Current: $CURRENT_BRANCH. Newest: $newest."
+
+  patch:
+    name: Build against the next bugfix release
+    if: github.event_name == 'schedule' || inputs.mode == 'next'
+    uses: duckdb/extension-ci-tools/.github/workflows/_extension_distribution.yml@v2.0-cyanoptera
+    with:
+      duckdb_version: v2.0-cyanoptera
+      ci_tools_version: v2.0-cyanoptera
+      extension_name: cardinal
+      exclude_archs: 'linux_arm64;linux_amd64_musl;linux_arm64_musl;osx_amd64;osx_arm64;windows_amd64;windows_amd64_mingw;windows_arm64;wasm_mvp;wasm_eh;wasm_threads'
+
+  next:
+    name: Build against the next minor release
+    needs: target
+    if: needs.target.outputs.next != ''
+    uses: duckdb/extension-ci-tools/.github/workflows/_extension_distribution.yml@main
+    with:
+      duckdb_version: ${{ needs.target.outputs.next }}
+      ci_tools_version: main
+      extension_name: cardinal
+      exclude_archs: 'linux_arm64;linux_amd64_musl;linux_arm64_musl;osx_amd64;osx_arm64;windows_amd64;windows_amd64_mingw;windows_arm64;wasm_mvp;wasm_eh;wasm_threads'
+
+  report:
+    name: Open or close the issue
+    needs: [target, patch, next]
+    if: always() && (github.event_name == 'schedule' || inputs.mode == 'next')
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+      actions: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      RUN: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      PATCH: ${{ needs.patch.result }}
+      NEXT: ${{ needs.next.result }}
+      NEXT_BRANCH: ${{ needs.target.outputs.next }}
+    steps:
+      # GitHub disables schedules after 60 days without repository activity. Enabling the
+      # workflow again resets that timer.
+      - run: gh api -X PUT "repos/$GH_REPO/actions/workflows/MainDistributionPipeline.yml/enable"
+
+      - run: |
+          open=$(gh issue list --label "$ISSUE_LABEL" --state open --json number --jq '.[0].number')
+
+          # Skipped (no newer release branch) and cancelled runs say nothing.
+          failed=""
+          [ "$PATCH" = failure ] && failed="$failed $CURRENT_BRANCH (next bugfix release)"
+          [ "$NEXT" = failure ] && failed="$failed $NEXT_BRANCH (next minor release)"
+
+          if [ -z "$failed" ]; then
+            if [ -n "$open" ] && [ "$PATCH" = success ]; then
+              gh issue close "$open" --comment "Builds pass again: $RUN"
+            fi
+            exit 0
+          fi
+
+          body="The extension fails to build or test against DuckDB:$failed.
+
+          Run: $RUN
+
+          Port it (docs/upgrading.md). Then, in duckdb/community-extensions, update
+          extensions/cardinal/description.yml: before the release, add \`repo.ref_next\`;
+          after it, bump \`repo.ref\` and \`extension.version\`."
+
+          if [ -n "$open" ]; then
+            gh issue comment "$open" --body "Still failing:$failed. $RUN"
+          else
+            gh label create "$ISSUE_LABEL" --color D93F0B --force
+            gh issue create --title "Build fails against an upcoming DuckDB release" \
+              --label "$ISSUE_LABEL" --assignee "$GITHUB_REPOSITORY_OWNER" --body "$body"
+          fi

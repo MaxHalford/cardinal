@@ -41,3 +41,9 @@ uv run scripts/gate.py all               # DuckDB's SQL tests, then the stress t
 ## 4. Benchmarks
 
 The research patch traces DuckDB's cardinality questions. Port it to the new release, as `research/patches/duckdb-<version>-ce-trace.patch`, then run each benchmark as in [research/README.md](../research/README.md). Compare with the previous release: `qerror.py` for the accuracy of the estimates DuckDB plans with, `worse.py` for plans worse than DuckDB's own, `runtime.py` for time.
+
+## 5. Release
+
+The daily CI run builds against DuckDB releases to come, and opens an issue when that fails: this is the signal to port. In `.github/workflows/MainDistributionPipeline.yml`, move `CURRENT_BRANCH`, the `v2.0-cyanoptera` refs and `duckdb_version` to the new release.
+
+Then, in [duckdb/community-extensions](https://github.com/duckdb/community-extensions), update `extensions/cardinal/description.yml`. Before the DuckDB release, add `repo.ref_next: <commit>`. After it, bump `repo.ref` and `extension.version`.
