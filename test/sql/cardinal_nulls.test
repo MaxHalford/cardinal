@@ -1,0 +1,51 @@
+# name: test/sql/cardinal_nulls.test
+# description: NULLs are counted apart from other values, sampled or not
+# group: [sql]
+
+require cardinal
+
+statement ok
+SET cardinal_background = false;
+
+statement ok
+SET cardinal_save = false;
+
+statement ok
+SET cardinal_estimator = 'bn';
+
+# Unique values, compacted into OTHER, and one NULL.
+statement ok
+CREATE TABLE t AS SELECT CASE WHEN range = 0 THEN NULL ELSE range END AS x FROM range(200000);
+
+# OTHER holds no NULL.
+query II
+EXPLAIN SELECT * FROM t WHERE x IS NULL;
+----
+physical_plan	<REGEX>:.*~1 row[^s].*
+
+query II
+EXPLAIN SELECT * FROM t WHERE x IS NOT NULL;
+----
+physical_plan	<REGEX>:.*~199,999 rows.*
+
+# x NOT IN (1, NULL) is never true.
+query II
+EXPLAIN SELECT * FROM t WHERE x NOT IN (1, NULL);
+----
+physical_plan	<REGEX>:.*~1 row[^s].*
+
+# 1.2M rows, sampled down to 1M by hash(rowid). The 120,039 NULLs are exactly the rows the
+# sample leaves out: their share is counted on the whole table.
+statement ok
+CREATE TABLE s AS SELECT CASE WHEN hash(range) > 16602069666338596454::UBIGINT THEN NULL ELSE range % 100 END AS x,
+    range % 7 AS y FROM range(1200000);
+
+query II
+EXPLAIN SELECT * FROM s WHERE x IS NULL;
+----
+physical_plan	<REGEX>:.*~120,039 rows.*
+
+query II
+EXPLAIN SELECT * FROM s WHERE x IS NOT NULL AND y = 3;
+----
+physical_plan	<REGEX>:.*~154,[0-9]{3} rows.*

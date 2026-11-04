@@ -11,6 +11,7 @@
 //                         share = matching infrequent values / members
 //        anything else    as many as among frequent values, smoothed:
 //                         share = (matches + 1) / (frequent values + 2)
+//        IS [NOT] NULL    0 [1]: NULLs have a state of their own
 //   4. P(A or B) = P(A) + P(B) - P(A and B): inclusion-exclusion.
 //
 // Same semantics as sorobn, which fits the models.
@@ -161,14 +162,17 @@ static bool IsColumnConstant(const Expression &column, const Expression &constan
 	       constant.GetExpressionClass() == ExpressionClass::BOUND_CONSTANT;
 }
 
-//! For =, IN, != and NOT of = or IN: their distinct non-null constants, and whether negated.
-static bool PointValues(const Expression &pred, idx_t &values, bool &negated) {
+//! For =, IN, != and NOT of = or IN: their distinct non-null constants, whether one is NULL,
+//! and whether negated.
+static bool PointValues(const Expression &pred, idx_t &values, bool &has_null, bool &negated) {
 	set<string> distinct;
 	auto add = [&](const Expression &constant) {
 		auto &value = constant.Cast<BoundConstantExpression>().GetValue();
-		if (!value.IsNull()) {
-			distinct.insert(value.ToString());
+		if (value.IsNull()) {
+			has_null = true;
+			return;
 		}
+		distinct.insert(value.ToString());
 	};
 	auto type = pred.GetExpressionType();
 	if (BoundComparisonExpression::IsComparison(pred)) {
@@ -196,7 +200,7 @@ static bool PointValues(const Expression &pred, idx_t &values, bool &negated) {
 	if (type == ExpressionType::OPERATOR_NOT) {
 		auto child = children[0]->GetExpressionType();
 		if ((child != ExpressionType::COMPARE_EQUAL && child != ExpressionType::COMPARE_IN) ||
-		    !PointValues(*children[0], values, negated)) {
+		    !PointValues(*children[0], values, has_null, negated)) {
 			return false;
 		}
 		negated = !negated;
@@ -220,9 +224,15 @@ static bool PointValues(const Expression &pred, idx_t &values, bool &negated) {
 //! Its values that are infrequent: its values, minus the frequent states it keeps.
 static bool PointShare(const Expression &pred, const ModelColumn &column, idx_t frequent_matches, double &share) {
 	idx_t values;
+	bool has_null = false;
 	bool negated;
-	if (!PointValues(pred, values, negated)) {
+	if (!PointValues(pred, values, has_null, negated)) {
 		return false;
+	}
+	// e.g. x NOT IN (1, NULL): NULL or false, never true.
+	if (negated && has_null) {
+		share = 0;
+		return true;
 	}
 	auto positive = negated ? column.FrequentCount() - frequent_matches : frequent_matches;
 	auto outside = values > positive ? values - positive : 0;
@@ -256,9 +266,25 @@ static vector<double> ColumnWeights(ClientContext &context, const vector<const E
 		return weights;
 	}
 
+	// OTHER holds no NULL: IS NULL fails it, IS NOT NULL passes it.
+	vector<const Expression *> value_preds;
+	for (auto pred : preds) {
+		auto type = pred->GetExpressionType();
+		if (type == ExpressionType::OPERATOR_IS_NULL) {
+			value_preds = {pred};
+			break;
+		}
+		if (type != ExpressionType::OPERATOR_IS_NOT_NULL) {
+			value_preds.push_back(pred);
+		}
+	}
+
 	// One predicate of the =, IN, != kind: point share. Otherwise, bucket share.
-	double share;
-	if (preds.size() != 1 || !PointShare(*preds[0], column, frequent_matches, share)) {
+	double share = 1;
+	if (value_preds.size() == 1 && value_preds[0]->GetExpressionType() == ExpressionType::OPERATOR_IS_NULL) {
+		share = 0;
+	} else if (!value_preds.empty() &&
+	           (value_preds.size() != 1 || !PointShare(*value_preds[0], column, frequent_matches, share))) {
 		share = double(frequent_matches + 1) / double(column.FrequentCount() + 2);
 	}
 	for (idx_t s = 0; s < states; s++) {

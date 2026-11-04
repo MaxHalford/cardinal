@@ -404,10 +404,53 @@ hash_t Fingerprint(Connection &con, TableCatalogEntry &table, idx_t rows) {
 	return fingerprint;
 }
 
+//! A column's NULLs the sample missed, e.g. 1 row of 10M: P(NULL | parent) = share, for
+//! every parent state, the other states scaled down. Its children, under NULL, follow
+//! their own marginal: NULL rows are taken as independent of the rest.
+static void AddNulls(const Codes &codes, vector<ModelColumn> &columns, idx_t i, double share) {
+	auto &col = columns[i];
+	auto null_state = col.values.size() - 1;
+	for (auto &entry : col.probabilities) {
+		entry.p *= 1 - share;
+	}
+	auto parent_states = col.parent.IsValid() ? columns[col.parent.GetIndex()].values.size() : 1;
+	for (idx_t a = 0; a < parent_states; a++) {
+		col.probabilities.push_back({null_state, a, share});
+	}
+
+	for (idx_t c = 0; c < columns.size(); c++) {
+		auto &child = columns[c];
+		if (!child.parent.IsValid() || child.parent.GetIndex() != i) {
+			continue;
+		}
+		auto counts = Marginal(codes[c], child.values.size());
+		for (idx_t s = 0; s < counts.size(); s++) {
+			if (counts[s] > 0) {
+				child.probabilities.push_back({s, null_state, double(counts[s]) / double(codes[c].size())});
+			}
+		}
+	}
+}
+
 shared_ptr<Model> FitModel(Connection &con, TableCatalogEntry &table, const vector<FitColumn> &fits,
                            const vector<FitFanout> &fanouts, const FitOptions &options) {
 	auto from = TableName(table);
-	auto rows = idx_t(QueryRows(*con.Query("SELECT count(*) FROM " + from)).GetValue(0, 0).GetValue<int64_t>());
+
+	// Rows, and each column's NULLs: counted on the whole table, as a sample can miss them.
+	vector<string> counts = {"count(*)"};
+	for (auto &fit : fits) {
+		counts.push_back("count(" + Quote(fit.name) + ")");
+	}
+	auto counted = con.Query("SELECT " + StringUtil::Join(counts, ", ") + " FROM " + from);
+	if (counted->HasError()) {
+		throw InvalidInputException("cardinal: %s", counted->GetError());
+	}
+	QueryRows totals(*counted);
+	auto rows = idx_t(totals.GetValue(0, 0).GetValue<int64_t>());
+	vector<idx_t> nulls;
+	for (idx_t i = 0; i < fits.size(); i++) {
+		nulls.push_back(rows - idx_t(totals.GetValue(i + 1, 0).GetValue<int64_t>()));
+	}
 
 	// 1. Sample. Small tables are taken whole. Fanouts: one LEFT JOIN of counts per foreign key.
 	vector<string> names, joins;
@@ -468,6 +511,12 @@ shared_ptr<Model> FitModel(Connection &con, TableCatalogEntry &table, const vect
 			non_null += distinct.count;
 		}
 		columns.push_back(States(fits[i], sample.Types()[i], ranked.back(), non_null, sample_rows, options));
+
+		// NULLs the sample missed: a state still, with no sampled row.
+		if (non_null == sample_rows && nulls[i] > 0) {
+			columns.back().values.push_back(Value());
+			columns.back().kinds.push_back(StateKind::NULL_VALUE);
+		}
 	}
 
 	// 3. Codes.
@@ -490,6 +539,12 @@ shared_ptr<Model> FitModel(Connection &con, TableCatalogEntry &table, const vect
 	// 5. Probabilities.
 	for (idx_t i = 0; i < columns.size(); i++) {
 		Probabilities(codes, columns[i], i, columns);
+	}
+	for (idx_t i = 0; i < fits.size(); i++) {
+		if (columns[i].kinds.back() == StateKind::NULL_VALUE && !codes[i].empty() &&
+		    Marginal(codes[i], columns[i].values.size()).back() == 0) {
+			AddNulls(codes, columns, i, double(nulls[i]) / double(rows));
+		}
 	}
 	return make_shared_ptr<Model>(rows, std::move(columns), Fingerprint(con, table, rows));
 }
