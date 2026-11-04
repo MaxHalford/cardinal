@@ -381,7 +381,7 @@ bool JoinEstimator::EstimateWith(uint64_t set, const Branch &conditions, double 
 			continue;
 		}
 		if (c.d.IsValid()) {
-			domain_of[c.d.GetIndex()] = &c;
+			domain_of[c.d.GetIndex()].push_back(&c);
 		}
 		for (auto &fk : c.fks) {
 			fk_of[fk.first].push_back(&c);
@@ -395,7 +395,7 @@ bool JoinEstimator::EstimateWith(uint64_t set, const Branch &conditions, double 
 	for (auto &c : classes) {
 		auto &domain = domains[c.id];
 		if (!c.d.IsValid() || c.fks.size() != 1 || !fk_of[c.d.GetIndex()].empty() ||
-		    !value_of[c.d.GetIndex()].empty() || !FoldKeys(c)) {
+		    !value_of[c.d.GetIndex()].empty() || domain_of[c.d.GetIndex()].size() > 1 || !FoldKeys(c)) {
 			continue;
 		}
 		auto r = c.fks.begin()->first;
@@ -597,9 +597,10 @@ void JoinEstimator::Members(const Class &c, optional_idx skip, map<string, idx_t
 double JoinEstimator::Weight(idx_t r, const Class *parent) {
 	map<string, idx_t> powers;
 	double scalar = 1.0;
-	auto dom = domain_of.find(r);
-	if (dom != domain_of.end() && dom->second != parent) {
-		Members(*dom->second, optional_idx(), powers, scalar);
+	for (auto c : domain_of[r]) {
+		if (c != parent) {
+			Members(*c, optional_idx(), powers, scalar);
+		}
 	}
 	for (auto c : fk_of[r]) {
 		if (c != parent) {
@@ -615,8 +616,15 @@ double JoinEstimator::Weight(idx_t r, const Class *parent) {
 //! in its week that pass d1's filters.
 StateWeights JoinEstimator::ValueWeights(idx_t r, const Class *parent) {
 	StateWeights result;
+	auto &values = value_of[r];
+	if (values.empty()) {
+		return result;
+	}
+	if (!relations[r].model) {
+		throw Unsupported();
+	}
 	auto &model = *relations[r].model;
-	for (auto c : value_of[r]) {
+	for (auto c : values) {
 		if (c == parent) {
 			continue;
 		}
@@ -626,6 +634,9 @@ StateWeights JoinEstimator::ValueWeights(idx_t r, const Class *parent) {
 		for (auto &member : c->fks) {
 			if (member.first == r) {
 				continue;
+			}
+			if (!relations[member.first].model) {
+				throw Unsupported();
 			}
 			auto &other = *relations[member.first].model;
 			auto &from = other.Columns()[other.Find(member.second).GetIndex()];
@@ -650,9 +661,8 @@ StateWeights JoinEstimator::ValueWeights(idx_t r, const Class *parent) {
 vector<double> JoinEstimator::Mass(idx_t m, const Class &c) {
 	map<string, idx_t> powers;
 	double scalar = 1.0;
-	auto dom = domain_of.find(m);
-	if (dom != domain_of.end()) {
-		Members(*dom->second, optional_idx(), powers, scalar);
+	for (auto dom : domain_of[m]) {
+		Members(*dom, optional_idx(), powers, scalar);
 	}
 	for (auto other : fk_of[m]) {
 		scalar *= Average(*other, m);
@@ -666,15 +676,28 @@ vector<double> JoinEstimator::Mass(idx_t m, const Class &c) {
 	return mass;
 }
 
+//! A value as the join compares it: in the columns' common type, e.g. INTEGER 1 as DOUBLE
+//! 1.0, to match a DOUBLE column's 1.0. False when the cast fails: it matches nothing.
+static bool JoinValue(const Value &value, const LogicalType &common, string &key) {
+	auto cast = value.DefaultTryCastAs(common);
+	if (!cast) {
+		return false;
+	}
+	key = cast->ToString();
+	return true;
+}
+
 //! Moves masses from the states of one column to those of another, by value. A kept value
 //! of one may fall in the other's OTHER, which holds members values evenly; NULL joins nothing.
 //! e.g. from week 7 kept with mass 0.01 to week 7 in OTHER: 0.01, as OTHER's states.
 vector<double> JoinEstimator::MapStates(const vector<double> &mass, const ModelColumn &from, const ModelColumn &to) {
+	auto common = LogicalType::ForceMaxLogicalType(context, from.type, to.type);
 	unordered_map<string, double> kept;
 	double other = 0;
 	for (idx_t s = 0; s < from.values.size(); s++) {
-		if (from.kinds[s] == StateKind::VALUE) {
-			kept[from.values[s].ToString()] = mass[s];
+		string key;
+		if (from.kinds[s] == StateKind::VALUE && JoinValue(from.values[s], common, key)) {
+			kept[key] = mass[s];
 		} else if (from.kinds[s] == StateKind::OTHER) {
 			other = mass[s];
 		}
@@ -688,7 +711,10 @@ vector<double> JoinEstimator::MapStates(const vector<double> &mass, const ModelC
 		if (to.kinds[s] != StateKind::VALUE) {
 			continue;
 		}
-		auto key = to.values[s].ToString();
+		string key;
+		if (!JoinValue(to.values[s], common, key)) {
+			continue;
+		}
 		to_kept.insert(key);
 		auto hit = kept.find(key);
 		result[s] = hit != kept.end() ? hit->second : per_other;
@@ -791,6 +817,11 @@ double JoinEstimator::Average(const Class &c, idx_t r) {
 	double e;
 	if (c.d.IsValid()) {
 		auto d = c.d.GetIndex();
+		for (auto other : domain_of[d]) {
+			if (other != &c) {
+				Members(*other, optional_idx(), powers, scalar);
+			}
+		}
 		for (auto other : fk_of[d]) {
 			scalar *= Average(*other, d);
 		}

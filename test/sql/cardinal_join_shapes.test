@@ -1,0 +1,87 @@
+# name: test/sql/cardinal_join_shapes.test
+# description: join shapes: keys of different types, a table keyed twice, outer joins, HAVING
+# group: [sql]
+
+require cardinal
+
+statement ok
+SET cardinal_background = false;
+
+statement ok
+SET cardinal_save = false;
+
+# A join on values, INTEGER with DOUBLE: 1 matches 1.0. 200 × 200 rows per value, 100 values.
+statement ok
+CREATE TABLE a AS SELECT range AS i, (range % 100)::INTEGER AS w FROM range(20000);
+
+statement ok
+CREATE TABLE b AS SELECT range AS i, (range % 100)::DOUBLE AS w FROM range(20000);
+
+statement ok
+CREATE TABLE e AS SELECT range AS i FROM range(20000);
+
+statement ok
+ALTER TABLE e ADD PRIMARY KEY (i);
+
+query I
+SELECT count(*) FROM a JOIN b ON a.w = b.w JOIN e ON e.i = a.i;
+----
+4000000
+
+query II
+EXPLAIN SELECT count(*) FROM a JOIN b ON a.w = b.w JOIN e ON e.i = a.i;
+----
+physical_plan	<REGEX>:.*~4,000,000 rows.*
+
+# d is the key of two classes: r joins its id, s its code. Each d row matches 4 rows of r
+# and 10 of s.
+statement ok
+CREATE TABLE d AS SELECT range AS id, range + 1000000 AS code, range % 10 AS v FROM range(100000);
+
+statement ok
+ALTER TABLE d ADD PRIMARY KEY (id);
+
+statement ok
+ALTER TABLE d ADD UNIQUE (code);
+
+statement ok
+CREATE TABLE r AS SELECT range % 100000 AS d_id, range AS i FROM range(400000);
+
+statement ok
+CREATE TABLE s AS SELECT (range % 100000) + 1000000 AS d_code FROM range(1000000);
+
+query I
+SELECT count(*) FROM r JOIN d ON r.d_id = d.id JOIN s ON s.d_code = d.code;
+----
+4000000
+
+query II
+EXPLAIN SELECT count(*) FROM r JOIN d ON r.d_id = d.id JOIN s ON s.d_code = d.code;
+----
+physical_plan	<REGEX>:.*~4,000,000 rows.*
+
+# Above a LEFT JOIN, q.y IS NULL keeps r's rows without a match: q's scan still reads its
+# 300,000 rows.
+statement ok
+CREATE TABLE q AS SELECT range AS i, CASE WHEN range % 1000 = 0 THEN NULL ELSE 1 END AS y FROM range(300000);
+
+query II
+EXPLAIN SELECT count(*) FROM r JOIN d ON r.d_id = d.id LEFT JOIN q ON q.i = r.i WHERE q.y IS NULL;
+----
+physical_plan	<REGEX>:.*~300,000 rows.*
+
+# HAVING filters groups, after the joins: the joins keep cardinal's estimates.
+query II
+EXPLAIN SELECT d.v, count(*) FROM r JOIN d ON r.d_id = d.id WHERE d.v < 3 GROUP BY d.v;
+----
+physical_plan	<REGEX>:.*~120,000 rows.*
+
+query II
+EXPLAIN SELECT d.v, count(*) FROM r JOIN d ON r.d_id = d.id WHERE d.v < 3 GROUP BY d.v HAVING count(*) > 5;
+----
+physical_plan	<REGEX>:.*~120,000 rows.*
+
+query II
+EXPLAIN SELECT * FROM (SELECT d.v, count(*) AS n FROM r JOIN d ON r.d_id = d.id WHERE d.v < 3 GROUP BY d.v) WHERE n > 5;
+----
+physical_plan	<REGEX>:.*~120,000 rows.*

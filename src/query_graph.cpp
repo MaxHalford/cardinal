@@ -25,8 +25,12 @@ public:
 	}
 
 	void Visit(LogicalOperator &op) {
+		// The relations of each child: [first, end).
+		vector<pair<idx_t, idx_t>> spans;
 		for (auto &child : op.children) {
+			auto first = graph.relations.size();
 			Visit(*child);
+			spans.emplace_back(first, graph.relations.size());
 		}
 		switch (op.type) {
 		case LogicalOperatorType::LOGICAL_GET:
@@ -49,9 +53,16 @@ public:
 			}
 			break;
 		}
+		case LogicalOperatorType::LOGICAL_AGGREGATE_AND_GROUP_BY:
+		case LogicalOperatorType::LOGICAL_WINDOW:
+			for (auto index : op.GetTableIndex()) {
+				derived_tables.insert(index);
+			}
+			break;
 		default:
 			break;
 		}
+		MarkNullable(op, spans);
 	}
 
 private:
@@ -78,11 +89,55 @@ private:
 	//! A projection passes columns through under new bindings.
 	void MapProjection(LogicalProjection &projection) {
 		for (idx_t i = 0; i < projection.expressions.size(); i++) {
+			ColumnBinding binding(projection.table_index, ProjectionIndex(i));
 			auto column = Resolve(*projection.expressions[i]);
 			if (column.first != DConstants::INVALID_INDEX) {
-				columns[ColumnBinding(projection.table_index, ProjectionIndex(i))] = column;
+				columns[binding] = column;
+			}
+			if (Derived(*projection.expressions[i])) {
+				derived_columns.insert(binding);
 			}
 		}
+	}
+
+	//! The relations an outer join may extend with NULLs, e.g. q in r LEFT JOIN q.
+	void MarkNullable(LogicalOperator &op, const vector<pair<idx_t, idx_t>> &spans) {
+		switch (op.type) {
+		case LogicalOperatorType::LOGICAL_COMPARISON_JOIN:
+		case LogicalOperatorType::LOGICAL_ANY_JOIN:
+		case LogicalOperatorType::LOGICAL_DELIM_JOIN:
+		case LogicalOperatorType::LOGICAL_ASOF_JOIN:
+			break;
+		default:
+			return;
+		}
+		if (spans.size() != 2) {
+			return;
+		}
+		auto type = op.Cast<LogicalJoin>().join_type;
+		vector<pair<idx_t, idx_t>> sides;
+		if (IsLeftOuterJoin(type) || type == JoinType::SINGLE) {
+			sides.push_back(spans[1]);
+		}
+		if (IsRightOuterJoin(type)) {
+			sides.push_back(spans[0]);
+		}
+		for (auto &side : sides) {
+			for (auto r = side.first; r < side.second; r++) {
+				nullable.insert(r);
+			}
+		}
+	}
+
+	//! Whether an expression reads a column an aggregate or a window computes: it sits above
+	//! the joins below them, e.g. HAVING count(*) > 5.
+	bool Derived(const Expression &expr) {
+		bool derived = false;
+		ExpressionIterator::VisitExpression<BoundColumnRefExpression>(expr, [&](const BoundColumnRefExpression &ref) {
+			derived =
+			    derived || derived_tables.count(ref.Binding().table_index) || derived_columns.count(ref.Binding());
+		});
+		return derived;
 	}
 
 	//! Filters on one scan are its filters. Equalities across scans are join conditions.
@@ -105,11 +160,17 @@ private:
 	}
 
 	//! A filter above joins, with its column references traced to the scans. On one relation:
-	//! one of its filters. On several: a filter of the graph.
+	//! one of its filters. On several: a filter of the graph. Left out: filters above an
+	//! aggregate or a window, and filters on the NULL-extended side of an outer join, e.g.
+	//! q.y IS NULL above r LEFT JOIN q, which the scans of q do not see.
 	void AddCrossFilter(const Expression &expr) {
+		if (Derived(expr)) {
+			return;
+		}
 		auto copy = expr.Copy();
 		uint64_t relations = 0;
 		bool resolved = true;
+		bool outer = false;
 		ExpressionIterator::VisitExpressionMutable<BoundColumnRefExpression>(
 		    copy, [&](BoundColumnRefExpression &ref, unique_ptr<Expression> &slot) {
 			    auto column = columns.find(ref.Binding());
@@ -120,11 +181,15 @@ private:
 				    return;
 			    }
 			    relations |= uint64_t(1) << column->second.first;
+			    outer = outer || nullable.count(column->second.first);
 			    // Named, as the scan's own column: e.g. to read a dimension's passing keys with SQL.
 			    auto &get = graph.relations[column->second.first].get.get();
 			    slot = make_uniq<BoundColumnRefExpression>(get.names[column->second.second], ref.GetReturnType(),
 			                                               scan->second);
 		    });
+		if (outer) {
+			return;
+		}
 		if (!resolved) {
 			// Its relations are unknown: no join estimate can account for it.
 			graph.filters.push_back(GraphFilter {std::move(copy), ~uint64_t(0), false, false});
@@ -208,6 +273,11 @@ private:
 	//! The scan's binding of each relation column, for filters above joins.
 	map<GraphColumn, ColumnBinding> scan_binding;
 	set<pair<GraphColumn, GraphColumn>> seen;
+	//! Relations an outer join extends with NULLs.
+	set<idx_t> nullable;
+	//! Columns computed by aggregates and windows, and projections of them.
+	set<TableIndex> derived_tables;
+	column_binding_set_t derived_columns;
 };
 
 //! Union-find over the edges' columns.

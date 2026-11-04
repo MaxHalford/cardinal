@@ -14,7 +14,7 @@
 // For any such tree, rooted at a relation:
 //
 //    weight(R) = E_R[1(f_R) · Π F_M] · Π weight(M) · Π avg(c, R)
-//                (M: other members of the class R is the domain of;
+//                (M: other members of the classes R is the domain of;
 //                 c: the classes R is a foreign key in)
 //    avg(c, R) = |D| / |R| · E_D[1(f_D) · F_R · Π F_M] · Π weight(M) · ...
 //    card      = |root| · weight(root)
@@ -142,7 +142,8 @@ private:
 
 	//! The set being estimated.
 	vector<Class> classes;
-	map<idx_t, const Class *> domain_of;
+	//! Classes each relation is the domain of, e.g. date_dim of d_date_sk and d_date.
+	map<idx_t, vector<const Class *>> domain_of;
 	map<idx_t, vector<const Class *>> fk_of;
 	//! Value classes of each relation.
 	map<idx_t, vector<const Class *>> value_of;
