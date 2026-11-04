@@ -85,3 +85,27 @@ query II
 EXPLAIN SELECT * FROM (SELECT d.v, count(*) AS n FROM r JOIN d ON r.d_id = d.id WHERE d.v < 3 GROUP BY d.v) WHERE n > 5;
 ----
 physical_plan	<REGEX>:.*~120,000 rows.*
+
+# A <> between two relations keeps most pairs: DuckDB's penalty for it, by distinct counts,
+# would make the cross product look ~130 times smaller.
+statement ok
+CREATE TABLE k AS SELECT range AS i, range % 7 AS g FROM range(10000);
+
+statement ok
+ALTER TABLE k ADD PRIMARY KEY (i);
+
+statement ok
+CREATE TABLE rz AS SELECT range % 10000 AS i, (range % 997)::VARCHAR AS z FROM range(50000);
+
+statement ok
+CREATE TABLE sz AS SELECT (range % 50)::VARCHAR AS z FROM range(100);
+
+query I
+SELECT count(*) FROM rz JOIN k ON rz.i = k.i, sz WHERE k.g = 3 AND rz.z <> sz.z;
+----
+713770
+
+query II
+EXPLAIN SELECT count(*) FROM rz JOIN k ON rz.i = k.i, sz WHERE k.g = 3 AND rz.z <> sz.z;
+----
+physical_plan	<REGEX>:.*~[5-7][0-9]{2},[0-9]{3} rows.*

@@ -9,6 +9,9 @@
 #include "scan_hook.hpp"
 
 #include "duckdb/common/bit_utils.hpp"
+#include "duckdb/planner/expression/bound_columnref_expression.hpp"
+#include "duckdb/planner/expression/bound_comparison_expression.hpp"
+#include "duckdb/planner/expression_iterator.hpp"
 #include "duckdb/optimizer/relation_statistics/relation_statistics_helper.hpp"
 #include "duckdb/storage/data_table.hpp"
 
@@ -288,6 +291,40 @@ static vector<double> RidgeSolve(const vector<vector<double>> &X, const vector<d
 	return theta;
 }
 
+//! Columns of a <> between two relations, e.g. substring(ca.zip, 1, 5) <> substring(s.zip, 1, 5),
+//! that nothing else reads: DuckDB divides the pair's rows by their distinct count^(2/3), when
+//! a <> keeps almost every pair. A distinct count of 1 leaves the pair whole.
+static void NotEqualColumns(const QueryGraph &graph, JoinTargets &targets) {
+	set<GraphColumn> joined;
+	for (auto &members : graph.classes) {
+		joined.insert(members.begin(), members.end());
+	}
+	for (auto &filter : graph.filters) {
+		auto &expr = *filter.expr;
+		auto type = expr.GetExpressionType();
+		if (!filter.resolved || !BoundComparisonExpression::IsComparison(expr) ||
+		    (type != ExpressionType::COMPARE_NOTEQUAL && type != ExpressionType::COMPARE_DISTINCT_FROM)) {
+			continue;
+		}
+		ExpressionIterator::VisitExpression<BoundColumnRefExpression>(expr, [&](const BoundColumnRefExpression &ref) {
+			for (idx_t r = 0; r < graph.relations.size(); r++) {
+				auto &relation = graph.relations[r];
+				auto &get = relation.get.get();
+				if (get.table_index != ref.Binding().table_index) {
+					continue;
+				}
+				GraphColumn column(r, get.GetColumnIds()[ref.Binding().column_index].GetPrimaryIndex());
+				auto filtered = FilteredColumns(get, relation.filters);
+				auto name = ColumnName(graph, column);
+				if (joined.count(column) || std::find(filtered.begin(), filtered.end(), name) != filtered.end()) {
+					continue;
+				}
+				targets.distinct[make_pair(get.table_index, column.second)] = 1;
+			}
+		});
+	}
+}
+
 //! Targets that leave the query to DuckDB.
 static JoinTargets HandsOff() {
 	JoinTargets targets;
@@ -427,6 +464,7 @@ JoinTargets PlanJoins(ClientContext &context, Optimizer &optimizer, LogicalOpera
 			targets.distinct[make_pair(graph.relations[column.first].get.get().table_index, column.second)] = distinct;
 		}
 	}
+	NotEqualColumns(graph, targets);
 
 	return targets;
 }
