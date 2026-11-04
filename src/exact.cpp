@@ -1,6 +1,7 @@
 #include "exact.hpp"
 #include "bn_estimator.hpp"
 #include "inner_query.hpp"
+#include "keys.hpp"
 
 #include "duckdb/catalog/catalog_entry/table_catalog_entry.hpp"
 #include "duckdb/catalog/catalog.hpp"
@@ -10,13 +11,26 @@
 #include "duckdb/planner/filter/expression_filter.hpp"
 #include "duckdb/planner/table_filter.hpp"
 #include "duckdb/storage/data_table.hpp"
+#include "duckdb/storage/object_cache.hpp"
 
 namespace duckdb {
 namespace cardinal {
 
-//! Counts by query text, shared by connections. Filter pushdown asks several times.
-static mutex cache_lock;
-static unordered_map<string, idx_t> cache;
+//! Counts by query text, shared by a database's connections. Filter pushdown asks several times.
+struct ExactCounts : public ObjectCacheEntry {
+	static string ObjectType() {
+		return "cardinal_exact";
+	}
+	string GetObjectType() override {
+		return ObjectType();
+	}
+	optional_idx GetEstimatedCacheMemory() const override {
+		return optional_idx();
+	}
+
+	mutex lock;
+	unordered_map<string, idx_t> counts;
+};
 
 //! A column of the scan as SQL, e.g. "group" quoted. Empty for a virtual column, e.g. rowid.
 static string ColumnSQL(LogicalGet &get, const ColumnIndex &index) {
@@ -89,14 +103,16 @@ optional_idx ExactCount(ClientContext &context, LogicalGet &get, const vector<un
 	if (sql.empty()) {
 		return optional_idx();
 	}
-	// The table's row count too: a count is stale once rows change.
+	// The table's row count and version too: a count is stale once rows change, or the table
+	// is rewritten.
 	auto &table = *get.GetTable();
-	auto key = sql + " -- " + to_string(table.IsDuckTable() ? table.GetStorage().GetTotalRows() : 0);
-
+	auto key = sql + " -- " + to_string(table.IsDuckTable() ? table.GetStorage().GetTotalRows() : 0) + " " +
+	           to_string(TableVersion(table));
+	auto cache = ObjectCache::GetObjectCache(context).GetOrCreate<ExactCounts>("cardinal:exact");
 	{
-		lock_guard<mutex> guard(cache_lock);
-		auto hit = cache.find(key);
-		if (hit != cache.end()) {
+		lock_guard<mutex> guard(cache->lock);
+		auto hit = cache->counts.find(key);
+		if (hit != cache->counts.end()) {
 			return hit->second;
 		}
 	}
@@ -107,8 +123,8 @@ optional_idx ExactCount(ClientContext &context, LogicalGet &get, const vector<un
 	}
 
 	auto rows = idx_t(result->GetValue(0, 0).GetValue<int64_t>());
-	lock_guard<mutex> guard(cache_lock);
-	cache[key] = rows;
+	lock_guard<mutex> guard(cache->lock);
+	cache->counts[key] = rows;
 	return rows;
 }
 

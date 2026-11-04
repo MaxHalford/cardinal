@@ -33,8 +33,12 @@ struct KeyColumn {
 	bool operator==(const KeyColumn &other) const;
 };
 
-//! Whether the column's non-null values are unique. Cached per row count.
+//! Whether the column's non-null values are unique. Cached per row count and table version.
 bool IsUnique(ClientContext &context, TableCatalogEntry &table, const string &column);
+
+//! The table's catalog entry version: CREATE OR REPLACE and ALTER change it, INSERT,
+//! UPDATE and DELETE do not.
+transaction_t TableVersion(TableCatalogEntry &table);
 
 //! Remember that fk references pk.
 void AddForeignKey(ClientContext &context, const KeyColumn &fk, const KeyColumn &pk);

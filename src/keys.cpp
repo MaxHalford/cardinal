@@ -45,8 +45,13 @@ struct KeyRegistry : public ObjectCacheEntry {
 	}
 
 	mutex lock;
-	//! Uniqueness by column, with the row count it was checked at.
-	map<KeyColumn, pair<idx_t, bool>> unique;
+	//! Uniqueness by column, with the row count and table version it was checked at.
+	struct Uniqueness {
+		idx_t rows;
+		transaction_t version;
+		bool unique;
+	};
+	map<KeyColumn, Uniqueness> unique;
 	//! fk -> pk
 	map<KeyColumn, KeyColumn> references;
 	//! Filtered columns, by table: "catalog.schema.table."
@@ -145,17 +150,22 @@ bool IsUnique(ClientContext &context, TableCatalogEntry &table, const string &co
 	auto &registry = Registry(context, table.ParentCatalog().GetName().GetIdentifierName());
 	KeyColumn key(table, column);
 	auto rows = Rows(table);
+	auto version = TableVersion(table);
 	{
 		lock_guard<mutex> guard(registry.lock);
 		auto hit = registry.unique.find(key);
-		if (hit != registry.unique.end() && hit->second.first == rows) {
-			return hit->second.second;
+		if (hit != registry.unique.end() && hit->second.rows == rows && hit->second.version == version) {
+			return hit->second.unique;
 		}
 	}
 	auto unique = CheckUnique(context, table, column);
 	lock_guard<mutex> guard(registry.lock);
-	registry.unique[key] = make_pair(rows, unique);
+	registry.unique[key] = {rows, version, unique};
 	return unique;
+}
+
+transaction_t TableVersion(TableCatalogEntry &table) {
+	return table.timestamp.load();
 }
 
 void AddForeignKey(ClientContext &context, const KeyColumn &fk, const KeyColumn &pk) {

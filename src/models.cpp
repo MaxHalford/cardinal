@@ -124,11 +124,6 @@ static bool Fresh(const Model &model, optional_idx rows) {
 	return drift <= MAX_DRIFT * double(MaxValue<idx_t>(model.Rows(), 1));
 }
 
-//! Changes with each CREATE OR REPLACE or ALTER of the table.
-static transaction_t Version(TableCatalogEntry &table) {
-	return table.timestamp.load();
-}
-
 //! Whether the table's first rows are those the model was fitted on. True when unknown.
 static bool SameRows(ClientContext &context, TableCatalogEntry &table, const Model &model) {
 	if (!table.IsDuckTable()) {
@@ -174,7 +169,7 @@ static void Install(ClientContext &context, TableCatalogEntry &table, shared_ptr
 	entry->queued = false;
 	if (model) {
 		entry->model = std::move(model);
-		entry->version = Version(table);
+		entry->version = TableVersion(table);
 		return;
 	}
 	entry->failed_rows = CurrentRows(table);
@@ -287,7 +282,7 @@ shared_ptr<Model> GetModel(ClientContext &context, TableCatalogEntry &table) {
 	auto rows = CurrentRows(table);
 	auto fanouts = KnownFanouts(context, table);
 	auto columns = FilterColumns(context, table);
-	auto version = Version(table);
+	auto version = TableVersion(table);
 	if (entry->model && entry->version == version && Fresh(*entry->model, rows) &&
 	    Covers(*entry->model, columns, fanouts)) {
 		return entry->model;
@@ -351,7 +346,7 @@ void PutModel(ClientContext &context, TableCatalogEntry &table, shared_ptr<Model
 	auto entry = ObjectCache::GetObjectCache(context).GetOrCreate<CachedModel>(Key(table));
 	lock_guard<mutex> guard(entry->lock);
 	entry->model = std::move(model);
-	entry->version = Version(table);
+	entry->version = TableVersion(table);
 	entry->read = true;
 }
 

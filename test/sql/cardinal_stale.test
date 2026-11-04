@@ -113,3 +113,23 @@ query II
 EXPLAIN SELECT * FROM u WHERE x = 3;
 ----
 physical_plan	<REGEX>:.*~1,000 rows.*
+
+# Exact counts too: a rewrite at the same row count counts again.
+statement ok
+SET cardinal_estimator = 'exact';
+
+statement ok
+CREATE TABLE v AS SELECT range % 10 AS x FROM range(1000);
+
+query II
+EXPLAIN SELECT * FROM v WHERE x = 3;
+----
+physical_plan	<REGEX>:.*~100 rows.*
+
+statement ok
+CREATE OR REPLACE TABLE v AS SELECT 3 AS x FROM range(1000);
+
+query II
+EXPLAIN SELECT * FROM v WHERE x = 3;
+----
+physical_plan	<REGEX>:.*~1,000 rows.*
