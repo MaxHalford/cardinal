@@ -41,14 +41,20 @@ Models are saved, so this is needed once per database and DuckDB release.
 
 ## When models change
 
-A model is refitted when its table's row count changes by more than 10%, or when a query filters on a column, or joins on a key, the model doesn't cover yet.
+A model is refitted when:
+
+- its table's row count changes by more than 10%,
+- the table is rewritten, e.g. with `CREATE OR REPLACE TABLE`, or altered, e.g. a column is renamed or retyped,
+- a query filters on a column, or joins on a key, the model doesn't cover yet.
+
+Rewrites by sessions without cardinal are caught too: a model is saved with a hash of the table's first 2,048 rows, which appends leave as is. `INSERT`, `UPDATE` and `DELETE` within 10% of the rows keep the model, unless they change those first rows. `CALL cardinal_fit_eager('t')` refits a table by hand.
 
 ## Where models live
 
 Models are saved in their own DuckDB file, never in your database:
 
 ```
-~/.duckdb/extension_data/cardinal/v2.0.0/store-2.db
+~/.duckdb/extension_data/cardinal/v2.0.0/store-3.db
 ```
 
 Each DuckDB release has its own file, as extensions do: after an upgrade, cardinal learns and fits again from scratch, and old files can be deleted. They're keyed by the path of your database file and the table, so a later session starts with them. A moved or copied database file starts from scratch too. Databases without a file, e.g. in memory, keep models in memory only. If another process is using the file, cardinal waits briefly, then keeps models in memory. Deleting the file forgets everything.

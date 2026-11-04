@@ -74,9 +74,11 @@ using Weights = vector<vector<double>>;
 
 class Model {
 public:
-	Model(idx_t rows, vector<ModelColumn> columns);
+	Model(idx_t rows, vector<ModelColumn> columns, hash_t fingerprint);
 
 	idx_t Rows() const;
+	//! The table's first rows, hashed when fitted (Fingerprint).
+	hash_t Fingerprint() const;
 	const vector<ModelColumn> &Columns() const;
 	optional_idx Find(const string &column) const;
 
@@ -96,6 +98,7 @@ private:
 	vector<bool> Evidence(const Weights &weights) const;
 
 	idx_t rows;
+	hash_t fingerprint;
 	vector<ModelColumn> columns;
 	vector<idx_t> roots;
 	//! Parents before children.

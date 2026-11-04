@@ -384,6 +384,19 @@ static void Probabilities(const Codes &codes, ModelColumn &col, idx_t i, const v
 	}
 }
 
+hash_t Fingerprint(Connection &con, TableCatalogEntry &table, idx_t rows) {
+	// One vector: cheap, and a rewrite rarely keeps its first rows. A sum, not a xor: equal
+	// rows would cancel out.
+	static constexpr idx_t FINGERPRINT_ROWS = 2048;
+	auto result = con.Query("SELECT hash(sum(hash(r))) FROM " + TableName(table) + " r WHERE rowid < " +
+	                        to_string(MinValue(rows, FINGERPRINT_ROWS)));
+	if (result->HasError()) {
+		throw InvalidInputException("cardinal: %s", result->GetError());
+	}
+	auto value = QueryRows(*result).GetValue(0, 0);
+	return value.IsNull() ? 0 : value.GetValue<uint64_t>();
+}
+
 shared_ptr<Model> FitModel(Connection &con, TableCatalogEntry &table, const vector<FitColumn> &fits,
                            const vector<FitFanout> &fanouts, const FitOptions &options) {
 	auto from = TableName(table);
@@ -471,7 +484,7 @@ shared_ptr<Model> FitModel(Connection &con, TableCatalogEntry &table, const vect
 	for (idx_t i = 0; i < columns.size(); i++) {
 		Probabilities(codes, columns[i], i, columns);
 	}
-	return make_shared_ptr<Model>(rows, std::move(columns));
+	return make_shared_ptr<Model>(rows, std::move(columns), Fingerprint(con, table, rows));
 }
 
 bool SupportedType(const LogicalType &type) {

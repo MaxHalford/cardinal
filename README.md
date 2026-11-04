@@ -45,7 +45,7 @@ SELECT * FROM cardinal_models();
 └─────────────┴────────────┴───────────┴──────────────────┘
 ```
 
-Models are saved in `~/.duckdb/extension_data/cardinal/`, never in your database, and refitted when a table's row count changes by more than 10%. A query that needs a model waits for its fit: milliseconds for small tables, about a second for large ones.
+Models are saved in `~/.duckdb/extension_data/cardinal/`, never in your database, and refitted when a table's row count changes by more than 10%, or when it is rewritten or altered. A query that needs a model waits for its fit: milliseconds for small tables, about a second for large ones.
 
 ## Example
 

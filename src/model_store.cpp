@@ -1,7 +1,7 @@
 //===----------------------------------------------------------------------===//
 // Models in the store (store.hpp), one row set per database and table:
 //
-//   tables          database, schema_name, table_name, row_count
+//   tables          database, schema_name, table_name, row_count, fingerprint
 //   columns         database, schema_name, table_name, column_name, parent, members
 //   states          database, schema_name, table_name, column_name, state, value, kind
 //   probabilities   database, schema_name, table_name, column_name, state, parent_state, probability
@@ -49,11 +49,12 @@ static unique_ptr<QueryRows> Select(Connection &con, const string &database, Tab
 }
 
 static shared_ptr<Model> Read(Connection &con, const string &database, TableCatalogEntry &table) {
-	auto tables = Select(con, database, table, "row_count", "tables");
+	auto tables = Select(con, database, table, "row_count, fingerprint", "tables");
 	if (tables->RowCount() == 0) {
 		return nullptr;
 	}
 	auto rows = idx_t(tables->GetValue(0, 0).GetValue<int64_t>());
+	auto fingerprint = hash_t(tables->GetValue(1, 0).GetValue<uint64_t>());
 
 	auto columns_result = Select(con, database, table, "column_name, parent, members", "columns");
 	auto &columns_rows = *columns_result;
@@ -114,7 +115,7 @@ static shared_ptr<Model> Read(Connection &con, const string &database, TableCata
 		entry.p = probabilities.GetValue(3, i).GetValue<double>();
 		column.probabilities.push_back(entry);
 	}
-	return make_shared_ptr<Model>(rows, std::move(columns));
+	return make_shared_ptr<Model>(rows, std::move(columns), fingerprint);
 }
 
 shared_ptr<Model> ReadModel(ClientContext &context, TableCatalogEntry &table) {
@@ -148,7 +149,7 @@ static void Save(Connection &con, const string &database, TableCatalogEntry &tab
 
 		Value db(database), schema(table.ParentSchema().name), name(table.name);
 		Appender tables(con, "tables");
-		tables.AppendRow(db, schema, name, Value::BIGINT(int64_t(model.Rows())));
+		tables.AppendRow(db, schema, name, Value::BIGINT(int64_t(model.Rows())), Value::UBIGINT(model.Fingerprint()));
 		tables.Close();
 
 		Appender columns(con, "columns");

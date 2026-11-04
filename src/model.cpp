@@ -32,7 +32,8 @@ static Chunks ToChunks(const vector<Value> &values, const LogicalType &type) {
 	return chunks;
 }
 
-Model::Model(idx_t rows, vector<ModelColumn> columns_p) : rows(rows), columns(std::move(columns_p)) {
+Model::Model(idx_t rows, vector<ModelColumn> columns_p, hash_t fingerprint)
+    : rows(rows), fingerprint(fingerprint), columns(std::move(columns_p)) {
 	for (auto &col : columns) {
 		col.state_chunks = ToChunks(col.values, col.type);
 	}
@@ -56,6 +57,10 @@ Model::Model(idx_t rows, vector<ModelColumn> columns_p) : rows(rows), columns(st
 
 idx_t Model::Rows() const {
 	return rows;
+}
+
+hash_t Model::Fingerprint() const {
+	return fingerprint;
 }
 
 const vector<ModelColumn> &Model::Columns() const {

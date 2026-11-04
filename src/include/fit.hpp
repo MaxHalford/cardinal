@@ -38,6 +38,10 @@ bool SupportedType(const LogicalType &type);
 //! distinct counts from DuckDB's statistics. Throws when there is none to model.
 vector<FitColumn> FitColumns(ClientContext &context, TableCatalogEntry &table, const vector<string> &names);
 
+//! A hash of the table's first rows, among the given count. Appends keep it, a rewrite
+//! changes it: e.g. CREATE OR REPLACE TABLE in a session without cardinal.
+hash_t Fingerprint(Connection &con, TableCatalogEntry &table, idx_t rows);
+
 //! Fit a table model over the given columns, with queries on con.
 //! The first column is the root of the tree.
 shared_ptr<Model> FitModel(Connection &con, TableCatalogEntry &table, const vector<FitColumn> &columns,

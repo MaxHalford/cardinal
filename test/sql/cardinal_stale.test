@@ -1,0 +1,87 @@
+# name: test/sql/cardinal_stale.test
+# description: models are refitted when a table is rewritten or altered, at a stable row count
+# group: [sql]
+
+require cardinal
+
+load __TEST_DIR__/cardinal_stale.db
+
+statement ok
+SET cardinal_store = '__TEST_DIR__/cardinal_stale_store.db';
+
+statement ok
+SET cardinal_background = false;
+
+statement ok
+SET cardinal_estimator = 'bn';
+
+statement ok
+CREATE TABLE t AS SELECT range % 10 AS x, range % 2 AS y FROM range(1000);
+
+# Fitted: x = 3 holds 100 rows of 1,000.
+query II
+EXPLAIN SELECT * FROM t WHERE x = 3;
+----
+physical_plan	<REGEX>:.*~100 rows.*
+
+# Rewritten, same row count: every row has x = 3.
+statement ok
+CREATE OR REPLACE TABLE t AS SELECT 3 AS x, range % 2 AS y FROM range(1000);
+
+query II
+EXPLAIN SELECT * FROM t WHERE x = 3;
+----
+physical_plan	<REGEX>:.*~1,000 rows.*
+
+# Altered: x is now the old y, so x = 1 holds 500 rows.
+statement ok
+ALTER TABLE t DROP COLUMN x;
+
+statement ok
+ALTER TABLE t RENAME COLUMN y TO x;
+
+query II
+EXPLAIN SELECT * FROM t WHERE x = 1;
+----
+physical_plan	<REGEX>:.*~500 rows.*
+
+# Rewritten in another session, which did not see the model: x = 3 holds 100 rows again.
+restart
+
+statement ok
+SET cardinal_store = '__TEST_DIR__/cardinal_stale_store.db';
+
+statement ok
+SET cardinal_background = false;
+
+statement ok
+SET cardinal_estimator = 'bn';
+
+statement ok
+CREATE OR REPLACE TABLE t AS SELECT range % 10 AS x FROM range(1000);
+
+query II
+EXPLAIN SELECT * FROM t WHERE x = 3;
+----
+physical_plan	<REGEX>:.*~100 rows.*
+
+# Appended in another session, under 10%: the stored model is kept. 150 rows of 1,050
+# have x = 3, the model says 10%.
+restart
+
+statement ok
+SET cardinal_store = '__TEST_DIR__/cardinal_stale_store.db';
+
+statement ok
+SET cardinal_background = false;
+
+statement ok
+SET cardinal_estimator = 'bn';
+
+statement ok
+INSERT INTO t SELECT 3 FROM range(50);
+
+query II
+EXPLAIN SELECT * FROM t WHERE x = 3;
+----
+physical_plan	<REGEX>:.*~105 rows.*

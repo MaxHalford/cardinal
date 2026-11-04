@@ -11,7 +11,13 @@
 // hang off episode_of_id, and their correlation is lost.
 //
 // Fresh: the table's row count is within MAX_DRIFT of the model's, and the
-// model covers the columns and fanouts known now.
+// model covers the columns and fanouts known now. And the table was not
+// rewritten or altered since the fit:
+//
+//   in memory   same catalog entry version: CREATE OR REPLACE and ALTER make
+//               a new one, INSERT, UPDATE and DELETE do not
+//   stored      same Fingerprint: its first rows, for changes made by
+//               sessions that did not see the model
 //
 // By default the query that needs a model waits for its fit. With
 // cardinal_background, fits run on a worker thread instead: the query plans
@@ -60,6 +66,8 @@ struct CachedModel : public ObjectCacheEntry {
 
 	mutex lock;
 	shared_ptr<Model> model;
+	//! The table's catalog entry version the model was fitted or read for.
+	transaction_t version = 0;
 	//! The stored model was read: it is not read again.
 	bool read = false;
 	//! A background fit is queued or running.
@@ -116,6 +124,25 @@ static bool Fresh(const Model &model, optional_idx rows) {
 	return drift <= MAX_DRIFT * double(MaxValue<idx_t>(model.Rows(), 1));
 }
 
+//! Changes with each CREATE OR REPLACE or ALTER of the table.
+static transaction_t Version(TableCatalogEntry &table) {
+	return table.timestamp.load();
+}
+
+//! Whether the table's first rows are those the model was fitted on. True when unknown.
+static bool SameRows(ClientContext &context, TableCatalogEntry &table, const Model &model) {
+	if (!table.IsDuckTable()) {
+		return true;
+	}
+	try {
+		InnerScope scope;
+		Connection con(*context.db);
+		return Fingerprint(con, table, model.Rows()) == model.Fingerprint();
+	} catch (std::exception &) {
+		return true;
+	}
+}
+
 static bool Background(ClientContext &context) {
 	Value value;
 	return context.TryGetCurrentSetting(BACKGROUND_SETTING, value) && value.GetValue<bool>();
@@ -147,6 +174,7 @@ static void Install(ClientContext &context, TableCatalogEntry &table, shared_ptr
 	entry->queued = false;
 	if (model) {
 		entry->model = std::move(model);
+		entry->version = Version(table);
 		return;
 	}
 	entry->failed_rows = CurrentRows(table);
@@ -259,7 +287,9 @@ shared_ptr<Model> GetModel(ClientContext &context, TableCatalogEntry &table) {
 	auto rows = CurrentRows(table);
 	auto fanouts = KnownFanouts(context, table);
 	auto columns = FilterColumns(context, table);
-	if (entry->model && Fresh(*entry->model, rows) && Covers(*entry->model, columns, fanouts)) {
+	auto version = Version(table);
+	if (entry->model && entry->version == version && Fresh(*entry->model, rows) &&
+	    Covers(*entry->model, columns, fanouts)) {
 		return entry->model;
 	}
 
@@ -277,8 +307,9 @@ shared_ptr<Model> GetModel(ClientContext &context, TableCatalogEntry &table) {
 			AddFilterColumns(context, table, stored_columns);
 			columns = FilterColumns(context, table);
 		}
-		if (stored && Fresh(*stored, rows) && Covers(*stored, columns, fanouts)) {
+		if (stored && Fresh(*stored, rows) && Covers(*stored, columns, fanouts) && SameRows(context, table, *stored)) {
 			entry->model = stored;
+			entry->version = version;
 			return stored;
 		}
 	}
@@ -305,6 +336,7 @@ shared_ptr<Model> GetModel(ClientContext &context, TableCatalogEntry &table) {
 		InnerScope scope;
 		Connection con(*context.db);
 		entry->model = FitNow(context, con, table);
+		entry->version = version;
 		Save(context, table, *entry->model);
 	} catch (std::exception &) {
 		// e.g. an empty table, or one the fit connection cannot see.
@@ -319,6 +351,7 @@ void PutModel(ClientContext &context, TableCatalogEntry &table, shared_ptr<Model
 	auto entry = ObjectCache::GetObjectCache(context).GetOrCreate<CachedModel>(Key(table));
 	lock_guard<mutex> guard(entry->lock);
 	entry->model = std::move(model);
+	entry->version = Version(table);
 	entry->read = true;
 }
 

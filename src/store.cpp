@@ -13,10 +13,10 @@ namespace duckdb {
 namespace cardinal {
 
 //! Version of the store's tables. A change starts a new store, as a DuckDB release does.
-static constexpr idx_t STORE_VERSION = 2;
+static constexpr idx_t STORE_VERSION = 3;
 
 static const char *STORE_TABLES = R"(
-CREATE TABLE IF NOT EXISTS tables (database VARCHAR, schema_name VARCHAR, table_name VARCHAR, row_count BIGINT);
+CREATE TABLE IF NOT EXISTS tables (database VARCHAR, schema_name VARCHAR, table_name VARCHAR, row_count BIGINT, fingerprint UBIGINT);
 CREATE TABLE IF NOT EXISTS columns (database VARCHAR, schema_name VARCHAR, table_name VARCHAR, column_name VARCHAR, parent VARCHAR, members BIGINT);
 CREATE TABLE IF NOT EXISTS states (database VARCHAR, schema_name VARCHAR, table_name VARCHAR, column_name VARCHAR, state INTEGER, value VARCHAR, kind VARCHAR);
 CREATE TABLE IF NOT EXISTS probabilities (database VARCHAR, schema_name VARCHAR, table_name VARCHAR, column_name VARCHAR, state INTEGER, parent_state INTEGER, probability DOUBLE);
