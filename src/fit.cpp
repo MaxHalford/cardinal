@@ -386,15 +386,22 @@ static void Probabilities(const Codes &codes, ModelColumn &col, idx_t i, const v
 
 hash_t Fingerprint(Connection &con, TableCatalogEntry &table, idx_t rows) {
 	// One vector: cheap, and a rewrite rarely keeps its first rows. A sum, not a xor: equal
-	// rows would cancel out.
+	// rows would cancel out. One hash per column, by COLUMNS: an alias for the whole row
+	// could name a column.
 	static constexpr idx_t FINGERPRINT_ROWS = 2048;
-	auto result = con.Query("SELECT hash(sum(hash(r))) FROM " + TableName(table) + " r WHERE rowid < " +
+	auto result = con.Query("SELECT hash(sum(hash(COLUMNS(*)))) FROM " + TableName(table) + " WHERE rowid < " +
 	                        to_string(MinValue(rows, FINGERPRINT_ROWS)));
 	if (result->HasError()) {
 		throw InvalidInputException("cardinal: %s", result->GetError());
 	}
-	auto value = QueryRows(*result).GetValue(0, 0);
-	return value.IsNull() ? 0 : value.GetValue<uint64_t>();
+	auto columns = result->ColumnCount();
+	QueryRows sums(*result);
+	hash_t fingerprint = 0;
+	for (idx_t c = 0; c < columns; c++) {
+		auto value = sums.GetValue(c, 0);
+		fingerprint = CombineHash(fingerprint, value.IsNull() ? 0 : value.GetValue<uint64_t>());
+	}
+	return fingerprint;
 }
 
 shared_ptr<Model> FitModel(Connection &con, TableCatalogEntry &table, const vector<FitColumn> &fits,

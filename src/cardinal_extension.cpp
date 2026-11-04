@@ -45,7 +45,7 @@ static void LoadInternal(ExtensionLoader &loader) {
 	config.AddExtensionOption(SAVE_SETTING, "Save fitted models in the store", LogicalType::BOOLEAN,
 	                          Value::BOOLEAN(true));
 	config.AddExtensionOption(STORE_SETTING,
-	                          "The models' file. Empty: ~/.duckdb/extension_data/cardinal/<DuckDB version>/store-2.db",
+	                          "The models' file. Empty: ~/.duckdb/extension_data/cardinal/<DuckDB version>/store-3.db",
 	                          LogicalType::VARCHAR, Value(""));
 	config.AddExtensionOption(BACKGROUND_SETTING,
 	                          "Fit models on a worker thread: queries plan with what there is meanwhile",

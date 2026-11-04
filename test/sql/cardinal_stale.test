@@ -85,3 +85,31 @@ query II
 EXPLAIN SELECT * FROM t WHERE x = 3;
 ----
 physical_plan	<REGEX>:.*~105 rows.*
+
+# A column named like the fingerprint's old row alias, kept by the rewrite: still caught.
+statement ok
+CREATE TABLE u AS SELECT range AS r, range % 10 AS x FROM range(1000);
+
+query II
+EXPLAIN SELECT * FROM u WHERE x = 3;
+----
+physical_plan	<REGEX>:.*~100 rows.*
+
+restart
+
+statement ok
+SET cardinal_store = '__TEST_DIR__/cardinal_stale_store.db';
+
+statement ok
+SET cardinal_background = false;
+
+statement ok
+SET cardinal_estimator = 'bn';
+
+statement ok
+CREATE OR REPLACE TABLE u AS SELECT range AS r, 3 AS x FROM range(1000);
+
+query II
+EXPLAIN SELECT * FROM u WHERE x = 3;
+----
+physical_plan	<REGEX>:.*~1,000 rows.*
