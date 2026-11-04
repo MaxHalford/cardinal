@@ -9,7 +9,7 @@
 
 DuckDB picks a join order from estimates of how many rows each join produces. Those estimates assume columns are independent and every join key matches as many rows as any other, so on real data they can be off by orders of magnitude, and DuckDB picks slow plans.
 
-`cardinal` is a DuckDB extension that learns Bayesian networks from your tables, and gives DuckDB their estimates instead. It needs no configuration: load it, and queries are planned with better numbers. Results never change, only plans. On the STATS-CEB benchmark, total runtime drops from 130 s to 67 s.
+`cardinal` is a DuckDB extension that learns Bayesian networks from your tables, and gives DuckDB their estimates instead. It needs no configuration: load it, and queries are planned with better numbers. Results never change, only plans. On the STATS-CEB benchmark, total runtime drops from 118 s to 70 s.
 
 <br clear="right"/>
 
@@ -123,11 +123,11 @@ The same queries, with DuckDB v2.0.0 alone and with cardinal, on five standard b
 
 | Benchmark | Queries | Total time | Faster / same / slower queries | Median estimate error |
 |---|---|---|---|---|
-| [STATS-CEB](https://github.com/Nathaniel-Han/End-to-End-CardEst-Benchmark) | 146 | **130 s → 67 s** | 42 / 102 / 2 | 23× → 1.8× |
-| [JOB](https://github.com/gregrahn/join-order-benchmark) | 113 | 3.5 s → 2.9 s | 29 / 74 / 10 | 19× → 2.2× |
-| [JOB-light](https://github.com/andreaskipf/learnedcardinalities) | 70 | 5.0 s → 4.8 s | 7 / 61 / 2 | 5.3× → 1.5× |
-| [DSB](https://github.com/microsoft/dsb), scale factor 10 | 219 | 2.5 s → 2.7 s | 0 / 196 / 23 | 4.1× → 2.0× |
-| TPC-H, scale factor 10 | 22 | 1.4 s → 1.3 s | 0 / 22 / 0 | 1.3× → 1.0× |
+| [STATS-CEB](https://github.com/Nathaniel-Han/End-to-End-CardEst-Benchmark) | 146 | **118 s → 70 s** | 38 / 107 / 1 | 23× → 1.8× |
+| [JOB](https://github.com/gregrahn/join-order-benchmark) | 113 | 4.0 s → 3.5 s | 32 / 64 / 17 | 19× → 2.2× |
+| [JOB-light](https://github.com/andreaskipf/learnedcardinalities) | 70 | 5.3 s → 5.1 s | 11 / 57 / 2 | 5.3× → 1.5× |
+| [DSB](https://github.com/microsoft/dsb), scale factor 10 | 219 | 2.8 s → 3.2 s | 0 / 196 / 23 | 4.1× → 2.0× |
+| TPC-H, scale factor 10 | 22 | 1.4 s → 1.4 s | 1 / 20 / 1 | 1.3× → 1.0× |
 
 - **Total time**: the whole workload, each query's median over several runs. Planning time included.
 - **Faster / same / slower**: a query is faster or slower when its time changes by more than 10% and 10 ms, the same otherwise.
