@@ -525,8 +525,7 @@ shared_ptr<Model> FitModel(Connection &con, TableCatalogEntry &table, const vect
 	for (idx_t i = 0; i < fanouts.size(); i++) {
 		codes.emplace_back();
 		columns.push_back(
-		    BinFanout(FanoutName(fanouts[i].fk_table.get().name.GetIdentifierName(), fanouts[i].fk_column),
-		              fanout_counts[i], codes.back()));
+		    BinFanout(FanoutName(fanouts[i].fk_table.get(), fanouts[i].fk_column), fanout_counts[i], codes.back()));
 	}
 	result.reset();
 
@@ -547,6 +546,10 @@ shared_ptr<Model> FitModel(Connection &con, TableCatalogEntry &table, const vect
 		}
 	}
 	return make_shared_ptr<Model>(rows, std::move(columns), Fingerprint(con, table, rows));
+}
+
+string FanoutName(TableCatalogEntry &fk_table, const string &fk_column) {
+	return FanoutName(fk_table.ParentSchema().name.GetIdentifierName(), fk_table.name.GetIdentifierName(), fk_column);
 }
 
 bool SupportedType(const LogicalType &type) {

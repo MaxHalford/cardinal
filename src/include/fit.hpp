@@ -31,6 +31,9 @@ struct FitFanout {
 	string fk_column;
 };
 
+//! The fanout column of a foreign key, e.g. "F(cast_info.movie_id)".
+string FanoutName(TableCatalogEntry &fk_table, const string &fk_column);
+
 //! Whether columns of the type can be modeled: flat values only, no lists, structs or blobs.
 bool SupportedType(const LogicalType &type);
 

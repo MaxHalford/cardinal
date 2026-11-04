@@ -65,8 +65,10 @@ inline idx_t ToCount(double value) {
 	return idx_t(MinValue(MaxValue(std::round(value), 1.0), MAX_COUNT));
 }
 
-//! e.g. "F(cast_info.movie_id)". Its states are bins, valued by their mean count.
-string FanoutName(const string &fk_table, const string &fk_column);
+//! e.g. "F(cast_info.movie_id)", or "F(s2.cast_info.movie_id)" outside the main schema: tables
+//! of the same name in two schemas have fanouts of their own. Its states are bins, valued by
+//! their mean count.
+string FanoutName(const string &fk_schema, const string &fk_table, const string &fk_column);
 
 //! Per-state weights of one column, e.g. 1 when a state passes a filter, else 0.
 //! Empty: no evidence on the column.

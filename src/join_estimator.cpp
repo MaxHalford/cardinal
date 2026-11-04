@@ -3,6 +3,7 @@
 #include "inner_query.hpp"
 #include "models.hpp"
 
+#include "duckdb/common/types/hash.hpp"
 #include "duckdb/planner/expression/bound_cast_expression.hpp"
 #include "duckdb/planner/expression/bound_columnref_expression.hpp"
 #include "duckdb/planner/expression/bound_comparison_expression.hpp"
@@ -503,7 +504,8 @@ JoinEstimator::RelationFilters JoinEstimator::BuildFilters(idx_t r, const vector
 			result.empty = true;
 			return result;
 		}
-		with_keys.key += " AND #" + to_string(column) + " IN (" + keys + ")";
+		// Hashed: a small dimension passes up to 10,000 keys, too long for a cache key.
+		with_keys.key += " AND #" + to_string(column) + " IN #" + to_string(Hash(keys.c_str(), keys.size()));
 		with_keys.filters.push_back(std::move(in));
 	}
 	result.has_folded = !folds.empty();
@@ -588,7 +590,7 @@ void JoinEstimator::Members(const Class &c, optional_idx skip, map<string, idx_t
 		if (skip.IsValid() && fk.first == skip.GetIndex()) {
 			continue;
 		}
-		powers[FanoutName(relations[fk.first].table.get().name.GetIdentifierName(), fk.second)]++;
+		powers[FanoutName(relations[fk.first].table.get(), fk.second)]++;
 		scalar *= Weight(fk.first, &c);
 	}
 }
@@ -812,7 +814,7 @@ double JoinEstimator::Average(const Class &c, idx_t r) {
 	map<string, idx_t> powers;
 	double scalar = 1.0;
 	Members(c, r, powers, scalar);
-	powers[FanoutName(relations[r].table.get().name.GetIdentifierName(), c.fks.at(r))]++;
+	powers[FanoutName(relations[r].table.get(), c.fks.at(r))]++;
 
 	double e;
 	if (c.d.IsValid()) {

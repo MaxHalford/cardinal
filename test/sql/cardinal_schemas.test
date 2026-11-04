@@ -1,0 +1,41 @@
+# name: test/sql/cardinal_schemas.test
+# description: tables of the same name in two schemas have fanouts of their own
+# group: [sql]
+
+require cardinal
+
+statement ok
+SET cardinal_background = false;
+
+statement ok
+SET cardinal_save = false;
+
+statement ok
+CREATE TABLE title AS SELECT range AS id, range % 10 AS kind FROM range(20000);
+
+statement ok
+ALTER TABLE title ADD PRIMARY KEY (id);
+
+statement ok
+CREATE SCHEMA s1;
+
+statement ok
+CREATE SCHEMA s2;
+
+# One row per title in s1.ci. In s2.ci, titles below 1,000 have 110 rows, the others 5.
+statement ok
+CREATE TABLE s1.ci AS SELECT range AS movie_id FROM range(20000);
+
+statement ok
+CREATE TABLE s2.ci AS SELECT CASE WHEN range < 100000 THEN range % 1000 ELSE range % 20000 END AS movie_id FROM range(200000);
+
+query I
+SELECT count(*) FROM title t JOIN s1.ci a ON a.movie_id = t.id JOIN s2.ci b ON b.movie_id = t.id WHERE t.kind = 3;
+----
+20000
+
+query II
+EXPLAIN SELECT count(*) FROM title t JOIN s1.ci a ON a.movie_id = t.id JOIN s2.ci b ON b.movie_id = t.id WHERE t.kind = 3;
+----
+physical_plan	<REGEX>:.*~(19|20|21),[0-9]{3} rows.*
+

@@ -3,8 +3,9 @@
 namespace duckdb {
 namespace cardinal {
 
-string FanoutName(const string &fk_table, const string &fk_column) {
-	return "F(" + fk_table + "." + fk_column + ")";
+string FanoutName(const string &fk_schema, const string &fk_table, const string &fk_column) {
+	auto schema = fk_schema == DEFAULT_SCHEMA ? "" : fk_schema + ".";
+	return "F(" + schema + fk_table + "." + fk_column + ")";
 }
 
 idx_t ModelColumn::FrequentCount() const {

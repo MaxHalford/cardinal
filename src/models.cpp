@@ -104,7 +104,7 @@ vector<FitFanout> KnownFanouts(ClientContext &context, TableCatalogEntry &table)
 
 static bool Covers(const Model &model, const vector<string> &columns, const vector<FitFanout> &fanouts) {
 	for (auto &fanout : fanouts) {
-		if (!model.Find(FanoutName(fanout.fk_table.get().name.GetIdentifierName(), fanout.fk_column)).IsValid()) {
+		if (!model.Find(FanoutName(fanout.fk_table.get(), fanout.fk_column)).IsValid()) {
 			return false;
 		}
 	}
