@@ -13,6 +13,7 @@ import sys
 
 RATIO = 1.1
 MIN_DELTA = 0.01
+ESTIMATORS = ("duckdb", "true")
 
 
 def read(path):
@@ -27,7 +28,7 @@ def times(out, name):
 def changed_plans(out):
     plans = {
         name: {row["query"]: row["plans"] for row in read(out / f"plans/{name}.jsonl")}
-        for name in ("duckdb", "true")
+        for name in ESTIMATORS
     }
     queries = plans["duckdb"].keys() & plans["true"].keys()
     return sum(plans["duckdb"][query] != plans["true"][query] for query in queries)
@@ -35,7 +36,7 @@ def changed_plans(out):
 
 def summarize(out):
     out = pathlib.Path(out)
-    runtime = {name: times(out, name) for name in ("duckdb", "true")}
+    runtime = {name: times(out, name) for name in ESTIMATORS}
     queries = runtime["duckdb"].keys() & runtime["true"].keys()
     faster = sum(runtime["duckdb"][query] > RATIO * runtime["true"][query]
                  and runtime["duckdb"][query] - runtime["true"][query] > MIN_DELTA
