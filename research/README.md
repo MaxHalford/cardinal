@@ -29,6 +29,8 @@ mkdir -p vendor/bin && cp ../duckdb/build/release/duckdb vendor/bin/duckdb-v2.0.
 | STATS-CEB | `./scripts/load_stats.sh` | `vendor/cardest-benchmark/workloads/stats_CEB/stats_CEB.sql` |
 | TPC-H (no harm check) | `./scripts/load_tpch.sh` | `data/workloads/tpch` |
 | DSB | `./scripts/load_dsb.sh` | `data/workloads/dsb` |
+| LDBC SNB BI, scale factor 0.1 | `./scripts/load_ldbc.sh` | `data/workloads/ldbc` |
+| SSB, scale factor 10 | `./scripts/load_ssb.sh` | `data/workloads/ssb` |
 
 ```sh
 w=vendor/learnedcardinalities/workloads/job-light.sql db=data/imdb.duckdb out=data/out/job-light
@@ -36,7 +38,7 @@ uv run ceq.py trace $w $db $out
 uv run ceq.py build $out
 uv run ceq.py truth $db $out
 uv run ceq.py check $db $out
-uv run plans.py $db $out duckdb true
+uv run plans.py $db $out duckdb
 
 # The extension, against DuckDB alone.
 uv run ext.py warmup $db $out
@@ -45,5 +47,17 @@ uv run qerror.py $out
 uv run worse.py $out
 uv run runtime.py $db $out cardinal_off cardinal_on
 ```
+
+To compare DuckDB with perfect estimates, build both plans, measure them, and
+summarize the results:
+
+```sh
+uv run plans.py $db $out duckdb true
+uv run runtime.py $db $out duckdb true
+uv run perfect.py data/out/*
+```
+
+`true` injects exact counts for inner equi-joins over base tables. DuckDB keeps
+its estimates for outer joins, non-equi joins, and derived relations.
 
 Tests: `uv run pytest`.
