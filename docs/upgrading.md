@@ -44,6 +44,10 @@ The research patch traces DuckDB's cardinality questions. Port it to the new rel
 
 ## 5. Release
 
+The daily **DuckDB versions** workflow opens a PR for a new release. Its push uses a
+repository deploy key with write access. Store the private key in the
+`DUCKDB_UPGRADE_KEY` Actions secret.
+
 The daily CI run builds against DuckDB releases to come, and opens an issue when that fails: this is the signal to port. In `.github/workflows/MainDistributionPipeline.yml`, move `CURRENT_BRANCH`, the `v2.0-cyanoptera` refs and `duckdb_version` to the new release.
 
 Then, in [duckdb/community-extensions](https://github.com/duckdb/community-extensions), update `extensions/cardinal/description.yml`. Before the DuckDB release, add `repo.ref_next: <commit>`. After it, bump `repo.ref` and `extension.version`.
